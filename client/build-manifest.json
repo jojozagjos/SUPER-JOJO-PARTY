@@ -1,0 +1,18 @@
+{
+  "version": "1.0.0",
+  "buildTime": "2025-12-26T05:34:07.027Z",
+  "files": [
+    "client/index.html",
+    "client/css/main.css",
+    "client/js/main.js",
+    "client/js/modules/App.js",
+    "client/js/modules/AudioManager.js",
+    "client/js/modules/AuthManager.js",
+    "client/js/modules/GameEngine.js",
+    "client/js/modules/LobbyController.js",
+    "client/js/modules/MinigameController.js",
+    "client/js/modules/SocketManager.js",
+    "client/js/modules/UIManager.js",
+    "server/index.js"
+  ]
+}

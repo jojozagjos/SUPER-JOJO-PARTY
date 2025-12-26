@@ -1,0 +1,40 @@
+{
+  "name": "super-jojo-party",
+  "version": "1.0.0",
+  "description": "A multiplayer 3D party board game built for the web",
+  "main": "server/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "nodemon server/index.js",
+    "build": "npm run build:client",
+    "build:client": "node scripts/build.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "socket.io": "^4.7.2",
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.2",
+    "uuid": "^9.0.1",
+    "sql.js": "^1.10.3",
+    "cors": "^2.8.5",
+    "compression": "^1.7.4",
+    "helmet": "^7.1.0",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "keywords": [
+    "game",
+    "multiplayer",
+    "party",
+    "webgl",
+    "threejs"
+  ],
+  "author": "Super JoJo Party Team",
+  "license": "MIT"
+}
