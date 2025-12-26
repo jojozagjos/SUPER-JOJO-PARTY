@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
+import { BOARDS } from './BoardData.js';
 
 // Lobby states
 export const LOBBY_STATE = {
@@ -359,9 +360,33 @@ export class LobbyManager {
     lobby.state = LOBBY_STATE.VOTING;
     lobby.votes = { board: {}, tutorial: {} };
 
-    this.io.to(lobbyId).emit('lobby:votingStarted', {
+    // Build voting options from BOARDS, excluding any disabled boards in settings
+    const disabled = new Set(lobby.settings.disabledMinigames || []);
+    const candidates = BOARDS.filter(b => !disabled.has(b.id));
+
+    // Shuffle candidates and pick up to 4 options
+    for (let i = candidates.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
+    }
+    const picked = candidates.slice(0, Math.min(4, candidates.length));
+
+    const options = picked.map(b => ({
+      id: b.id,
+      name: b.name,
+      description: b.description,
+      icon: b.preview || null
+    }));
+
+    const votingPayload = {
+      title: 'Vote!',
+      subtitle: 'Select a board',
+      options,
+      duration: 30,
       lobby: this.sanitizeLobby(lobby)
-    });
+    };
+
+    this.io.to(lobbyId).emit('lobby:votingStarted', votingPayload);
 
     return { success: true };
   }

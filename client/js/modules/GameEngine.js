@@ -35,9 +35,10 @@ export class GameEngine {
   }
 
   initGame(data) {
-    this.gameState = data.gameState;
-    this.players = data.players;
-    this.boardData = data.board;
+    this.gameState = data.gameState || data.game;
+    this.players = data.players || this.gameState?.players;
+    this.boardData = data.board || this.gameState?.board;
+    this.showedBoardIntro = false;
     
     this.initThreeJS();
     this.createBoard();
@@ -46,8 +47,274 @@ export class GameEngine {
     this.startGameLoop();
     this.updateHUD();
     
-    // Play intro animation
+    // Show board intro cinematic first, then start the game
+    this.showBoardIntro();
+  }
+
+  showBoardIntro() {
+    const boardId = this.gameState?.boardId || this.boardData?.id;
+    const boardName = this.getBoardDisplayName(boardId);
+    
+    // Create board intro overlay
+    const overlay = document.createElement('div');
+    overlay.id = 'board-intro-overlay';
+    overlay.className = 'board-intro-overlay';
+    
+    const boardFeatures = this.getBoardFeatures(boardId);
+    
+    overlay.innerHTML = `
+      <div class="board-intro-container">
+        <div class="board-intro-title">
+          <h1>Welcome to</h1>
+          <h2 class="board-name">${boardName}</h2>
+        </div>
+        
+        <div class="board-intro-content">
+          <div class="board-features">
+            <h3>Board Features</h3>
+            <ul class="feature-list">
+              ${boardFeatures.map(f => `
+                <li class="feature-item">
+                  <span class="feature-icon">${f.icon}</span>
+                  <span class="feature-text">${f.text}</span>
+                </li>
+              `).join('')}
+            </ul>
+          </div>
+          
+          <div class="board-intro-tip">
+            <span class="tip-icon">💡</span>
+            <span class="tip-text">${this.getBoardTip(boardId)}</span>
+          </div>
+        </div>
+        
+        <div class="board-intro-actions">
+          <button class="btn btn-secondary" id="skip-intro-btn">Skip</button>
+          <button class="btn btn-primary btn-large" id="watch-tour-btn">🎬 Watch Board Tour</button>
+        </div>
+      </div>
+    `;
+    
+    document.body.appendChild(overlay);
+    
+    // Animate in
+    requestAnimationFrame(() => {
+      overlay.classList.add('visible');
+    });
+    
+    // Button handlers
+    document.getElementById('skip-intro-btn')?.addEventListener('click', () => {
+      this.closeBoardIntro();
+    });
+    
+    document.getElementById('watch-tour-btn')?.addEventListener('click', () => {
+      this.playBoardTour();
+    });
+  }
+
+  getBoardDisplayName(boardId) {
+    const names = {
+      'tropical_paradise': 'Tropical Paradise',
+      'crystal_caves': 'Crystal Caves',
+      'haunted_manor': 'Haunted Manor',
+      'sky_kingdom': 'Sky Kingdom'
+    };
+    return names[boardId] || boardId?.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) || 'Unknown Board';
+  }
+
+  getBoardFeatures(boardId) {
+    const features = {
+      'tropical_paradise': [
+        { icon: '🌊', text: 'Tide Mechanics - Paths change every 3 turns!' },
+        { icon: '🥥', text: 'Coconut Grove - Get surprise coin gifts' },
+        { icon: '🌴', text: 'Hidden shortcuts through the jungle' },
+        { icon: '🏝️', text: 'Lucky Lagoon - Bonus rewards await' }
+      ],
+      'crystal_caves': [
+        { icon: '💎', text: 'Crystal Spaces - Random bonus coins or items' },
+        { icon: '🔮', text: 'Amethyst Hall - Special trading zone' },
+        { icon: '⛏️', text: 'Minecart shortcuts between areas' },
+        { icon: '🌟', text: 'Emerald Chamber - Rare item finds' }
+      ],
+      'haunted_manor': [
+        { icon: '👻', text: 'Ghost Spaces - Coins can be stolen!' },
+        { icon: '🏚️', text: 'Secret passages through the manor' },
+        { icon: '🔮', text: 'Séance Room - Player positions may shuffle' },
+        { icon: '⚰️', text: 'Crypt shortcuts with risky rewards' }
+      ],
+      'sky_kingdom': [
+        { icon: '💨', text: 'Wind Gusts - Get blown extra spaces!' },
+        { icon: '🌈', text: 'Rainbow Bridge connections' },
+        { icon: '☁️', text: 'Cloud platforms that move' },
+        { icon: '⚡', text: 'Thunder Pit - Risky but rewarding' }
+      ]
+    };
+    return features[boardId] || [
+      { icon: '⭐', text: 'Collect stars to win!' },
+      { icon: '💰', text: 'Earn coins in minigames' },
+      { icon: '🎲', text: 'Roll dice to move around' },
+      { icon: '🎁', text: 'Use items for advantages' }
+    ];
+  }
+
+  getBoardTip(boardId) {
+    const tips = {
+      'tropical_paradise': 'Watch the tide timer! Plan your route when paths are about to change.',
+      'crystal_caves': 'Crystal spaces can give you great rewards - take risks!',
+      'haunted_manor': 'Ghosts are dangerous but avoidable. Learn the safe paths!',
+      'sky_kingdom': 'Use the wind to your advantage - it can help or hurt!'
+    };
+    return tips[boardId] || 'Explore the board and discover its secrets!';
+  }
+
+  playBoardTour() {
+    // Close the intro modal
+    const overlay = document.getElementById('board-intro-overlay');
+    if (overlay) {
+      overlay.querySelector('.board-intro-container').style.display = 'none';
+    }
+    
+    // Show tour indicator
+    const tourUI = document.createElement('div');
+    tourUI.id = 'board-tour-ui';
+    tourUI.className = 'board-tour-ui';
+    tourUI.innerHTML = `
+      <div class="tour-progress">
+        <span class="tour-step">Tour: <span id="tour-step-num">1</span>/4</span>
+        <button class="btn btn-sm" id="skip-tour-btn">Skip Tour</button>
+      </div>
+      <div class="tour-description" id="tour-description">
+        Starting the board tour...
+      </div>
+    `;
+    document.body.appendChild(tourUI);
+    
+    document.getElementById('skip-tour-btn')?.addEventListener('click', () => {
+      this.skipBoardTour();
+    });
+    
+    // Start cinematic camera tour
+    this.startCameraTour();
+  }
+
+  startCameraTour() {
+    const boardId = this.gameState?.boardId || this.boardData?.id;
+    const tourPoints = this.getTourPoints(boardId);
+    
+    let currentStep = 0;
+    
+    const nextStep = () => {
+      if (currentStep >= tourPoints.length) {
+        this.endBoardTour();
+        return;
+      }
+      
+      const point = tourPoints[currentStep];
+      const stepNum = document.getElementById('tour-step-num');
+      const description = document.getElementById('tour-description');
+      
+      if (stepNum) stepNum.textContent = currentStep + 1;
+      if (description) description.textContent = point.description;
+      
+      // Animate camera to this point
+      this.animateCameraTo(point.position, point.lookAt, 2000, () => {
+        // Hold for a moment
+        setTimeout(() => {
+          currentStep++;
+          nextStep();
+        }, 2000);
+      });
+    };
+    
+    nextStep();
+  }
+
+  getTourPoints(boardId) {
+    // Generic tour points - can be customized per board
+    return [
+      {
+        position: { x: 0, y: 60, z: 0 },
+        lookAt: { x: 0, y: 0, z: 0 },
+        description: 'This is the full board overview. Plan your route carefully!'
+      },
+      {
+        position: { x: -20, y: 20, z: 20 },
+        lookAt: { x: 0, y: 0, z: 0 },
+        description: 'Blue spaces give you 3 coins. Red spaces take 3 coins away!'
+      },
+      {
+        position: { x: 20, y: 15, z: -10 },
+        lookAt: { x: 10, y: 0, z: -5 },
+        description: 'Event spaces trigger special happenings - good or bad!'
+      },
+      {
+        position: { x: 0, y: 30, z: 40 },
+        lookAt: { x: 0, y: 0, z: 0 },
+        description: 'Stars appear randomly. Buy them for 20 coins when you pass!'
+      }
+    ];
+  }
+
+  animateCameraTo(targetPos, lookAtPos, duration, onComplete) {
+    const startPos = {
+      x: this.camera.position.x,
+      y: this.camera.position.y,
+      z: this.camera.position.z
+    };
+    const startTime = Date.now();
+    
+    const animate = () => {
+      const elapsed = Date.now() - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      const eased = this.easeOutCubic(progress);
+      
+      this.camera.position.x = startPos.x + (targetPos.x - startPos.x) * eased;
+      this.camera.position.y = startPos.y + (targetPos.y - startPos.y) * eased;
+      this.camera.position.z = startPos.z + (targetPos.z - startPos.z) * eased;
+      
+      this.camera.lookAt(lookAtPos.x, lookAtPos.y, lookAtPos.z);
+      
+      if (progress < 1) {
+        requestAnimationFrame(animate);
+      } else if (onComplete) {
+        onComplete();
+      }
+    };
+    
+    animate();
+  }
+
+  skipBoardTour() {
+    this.endBoardTour();
+  }
+
+  endBoardTour() {
+    // Remove tour UI
+    const tourUI = document.getElementById('board-tour-ui');
+    if (tourUI) tourUI.remove();
+    
+    // Close intro overlay
+    this.closeBoardIntro();
+  }
+
+  closeBoardIntro() {
+    const overlay = document.getElementById('board-intro-overlay');
+    if (overlay) {
+      overlay.classList.remove('visible');
+      setTimeout(() => overlay.remove(), 300);
+    }
+    
+    this.showedBoardIntro = true;
+    
+    // Now play the regular intro animation
     this.playIntroAnimation();
+    
+    // Notify server that player is ready
+    this.app.socket.socket.emit('game:ready', (response) => {
+      if (!response.success) {
+        console.warn('Failed to signal game ready:', response.error);
+      }
+    });
   }
 
   initThreeJS() {
@@ -324,22 +591,45 @@ export class GameEngine {
 
   createPlayerMesh(player, index) {
     const colors = [0x6C5CE7, 0x00CEC9, 0xFDCB6E, 0xFF6B6B];
-    const color = colors[index % colors.length];
+    const color = colors[index % colors.length] || 0x6C5CE7; // Default color if index is out of bounds
 
     // Create character group
     const group = new THREE.Group();
 
-    // Body (capsule shape)
-    const bodyGeometry = new THREE.CapsuleGeometry(0.3, 0.6, 8, 16);
-    const bodyMaterial = new THREE.MeshStandardMaterial({
-      color,
-      roughness: 0.5,
-      metalness: 0.2
-    });
-    const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
-    body.position.y = 0.5;
-    body.castShadow = true;
-    group.add(body);
+    // Body (capsule shape) - prefer CapsuleGeometry, otherwise build composite capsule
+    if (typeof THREE.CapsuleGeometry === 'function') {
+      const bodyGeometry = new THREE.CapsuleGeometry(0.3, 0.6, 8, 16);
+      const bodyMaterial = new THREE.MeshStandardMaterial({
+        color,
+        roughness: 0.5,
+        metalness: 0.2
+      });
+      const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+      body.position.y = 0.5;
+      body.castShadow = true;
+      group.add(body);
+    } else {
+      const bodyMaterial = new THREE.MeshStandardMaterial({
+        color,
+        roughness: 0.5,
+        metalness: 0.2
+      });
+
+      const cyl = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.6, 12), bodyMaterial.clone());
+      cyl.position.y = 0.5;
+      cyl.castShadow = true;
+      group.add(cyl);
+
+      const top = new THREE.Mesh(new THREE.SphereGeometry(0.3, 12, 12), bodyMaterial.clone());
+      top.position.y = 0.95;
+      top.castShadow = true;
+      group.add(top);
+
+      const bottom = new THREE.Mesh(new THREE.SphereGeometry(0.3, 12, 12), bodyMaterial.clone());
+      bottom.position.y = 0.05;
+      bottom.castShadow = true;
+      group.add(bottom);
+    }
 
     // Head
     const headGeometry = new THREE.SphereGeometry(0.25, 16, 16);

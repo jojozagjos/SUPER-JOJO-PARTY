@@ -1050,19 +1050,46 @@ export class LobbyController {
   initVotingScreen(data) {
     this.votingData = data;
     this.selectedVote = null;
+    this.boardPreviewScene = null;
+    this.boardPreviewRenderer = null;
+    this.boardPreviewAnimationId = null;
+
+    // Clear any existing timer
+    if (this.votingTimer) {
+      clearInterval(this.votingTimer);
+      this.votingTimer = null;
+    }
 
     const title = document.getElementById('voting-title');
     const subtitle = document.getElementById('voting-subtitle');
     const options = document.getElementById('voting-options');
-    const timer = document.getElementById('voting-timer');
+    const timerEl = document.getElementById('vote-timer');
 
     if (title) title.textContent = data.title || 'Vote!';
-    if (subtitle) subtitle.textContent = data.subtitle || 'Select an option';
+    if (subtitle) subtitle.textContent = data.subtitle || 'Select a board';
 
     if (options && data.options) {
-      options.innerHTML = data.options.map(option => `
-        <div class="vote-option" data-vote-id="${option.id}">
-          <div class="option-preview">${option.icon || '❓'}</div>
+      // Add a "Random" option at the end
+      const allOptions = [
+        ...data.options,
+        {
+          id: 'random',
+          name: '🎲 Random',
+          description: 'Let fate decide! A random board will be chosen.',
+          icon: null,
+          isRandom: true
+        }
+      ];
+
+      options.innerHTML = allOptions.map(option => `
+        <div class="vote-option${option.isRandom ? ' random-option' : ''}" data-vote-id="${option.id}">
+          <div class="option-preview">
+            ${option.isRandom 
+              ? '<div class="random-dice">🎲</div>'
+              : `<img src="${option.icon}" alt="${this.escapeHtml(option.name)}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                 <div class="preview-fallback" style="display:none;">🗺️</div>`
+            }
+          </div>
           <div class="option-name">${this.escapeHtml(option.name)}</div>
           <div class="option-desc">${this.escapeHtml(option.description || '')}</div>
           <div class="vote-count" id="vote-count-${option.id}">0 votes</div>
@@ -1070,52 +1097,359 @@ export class LobbyController {
       `).join('');
 
       // Add click handlers
-      options.querySelectorAll('.vote-option').forEach(option => {
-        option.addEventListener('click', () => {
-          this.castVote(option.dataset.voteId);
+      options.querySelectorAll('.vote-option').forEach(optionEl => {
+        optionEl.addEventListener('click', () => {
+          const voteId = optionEl.dataset.voteId;
+          this.selectVoteOption(voteId);
         });
       });
     }
 
+    // Create 3D preview container if not exists
+    this.setup3DBoardPreview();
+
     // Start timer
-    if (data.duration) {
-      this.startVotingTimer(data.duration);
+    const duration = data.duration || 30;
+    if (timerEl) timerEl.textContent = duration;
+    this.startVotingTimer(duration);
+  }
+
+  setup3DBoardPreview() {
+    // Check if preview container exists, if not create it
+    let previewContainer = document.getElementById('board-preview-3d');
+    if (!previewContainer) {
+      const votingContainer = document.querySelector('.voting-container');
+      if (votingContainer) {
+        previewContainer = document.createElement('div');
+        previewContainer.id = 'board-preview-3d';
+        previewContainer.className = 'board-preview-3d';
+        previewContainer.innerHTML = `
+          <div class="preview-header">
+            <span class="preview-title">Board Preview</span>
+            <span class="preview-board-name" id="preview-board-name">Select a board</span>
+          </div>
+          <canvas id="board-preview-canvas"></canvas>
+          <div class="preview-info" id="preview-info">
+            <p>Click on a board to see a 3D preview</p>
+          </div>
+        `;
+        // Insert before voting options
+        const optionsEl = document.getElementById('voting-options');
+        if (optionsEl) {
+          votingContainer.insertBefore(previewContainer, optionsEl);
+        } else {
+          votingContainer.appendChild(previewContainer);
+        }
+      }
+    }
+
+    // Initialize Three.js preview
+    this.init3DPreview();
+  }
+
+  init3DPreview() {
+    const canvas = document.getElementById('board-preview-canvas');
+    if (!canvas || typeof THREE === 'undefined') return;
+
+    // Cleanup existing
+    this.cleanup3DPreview();
+
+    try {
+      // Create scene
+      this.boardPreviewScene = new THREE.Scene();
+      this.boardPreviewScene.background = new THREE.Color(0x1a1a2e);
+
+      // Create camera
+      this.boardPreviewCamera = new THREE.PerspectiveCamera(45, canvas.clientWidth / canvas.clientHeight, 0.1, 1000);
+      this.boardPreviewCamera.position.set(15, 20, 25);
+      this.boardPreviewCamera.lookAt(0, 0, 0);
+
+      // Create renderer
+      this.boardPreviewRenderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+      this.boardPreviewRenderer.setSize(canvas.clientWidth, canvas.clientHeight);
+      this.boardPreviewRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+      // Add lights
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+      this.boardPreviewScene.add(ambientLight);
+      const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+      dirLight.position.set(10, 20, 10);
+      this.boardPreviewScene.add(dirLight);
+
+      // Add placeholder message
+      this.showPreviewPlaceholder();
+
+      // Start animation loop
+      this.animateBoardPreview();
+    } catch (e) {
+      console.warn('Could not initialize 3D preview:', e);
+    }
+  }
+
+  showPreviewPlaceholder() {
+    // Clear existing objects except lights
+    if (this.boardPreviewScene) {
+      const toRemove = [];
+      this.boardPreviewScene.traverse(obj => {
+        if (obj.isMesh) toRemove.push(obj);
+      });
+      toRemove.forEach(obj => {
+        obj.geometry?.dispose();
+        obj.material?.dispose();
+        this.boardPreviewScene.remove(obj);
+      });
+    }
+  }
+
+  selectVoteOption(voteId) {
+    this.selectedVote = voteId;
+    
+    // Update UI selection
+    document.querySelectorAll('.vote-option').forEach(option => {
+      option.classList.toggle('selected', option.dataset.voteId === voteId);
+    });
+
+    // Update 3D preview
+    this.updateBoardPreview(voteId);
+
+    // Play sound
+    this.app.audio.playSFX('click');
+  }
+
+  updateBoardPreview(boardId) {
+    const previewName = document.getElementById('preview-board-name');
+    const previewInfo = document.getElementById('preview-info');
+    
+    if (boardId === 'random') {
+      if (previewName) previewName.textContent = '🎲 Random Board';
+      if (previewInfo) previewInfo.innerHTML = '<p>A random board will be chosen from all available options!</p>';
+      this.showRandomPreview();
+      return;
+    }
+
+    // Find board data
+    const board = this.votingData.options?.find(b => b.id === boardId);
+    if (board) {
+      if (previewName) previewName.textContent = board.name;
+      if (previewInfo) previewInfo.innerHTML = `<p>${this.escapeHtml(board.description)}</p>`;
+      this.show3DBoardPreview(boardId);
+    }
+  }
+
+  showRandomPreview() {
+    if (!this.boardPreviewScene) return;
+    this.showPreviewPlaceholder();
+
+    // Add floating question marks
+    const geometry = new THREE.BoxGeometry(2, 2, 2);
+    const material = new THREE.MeshPhongMaterial({ color: 0x6c5ce7 });
+    
+    for (let i = 0; i < 5; i++) {
+      const cube = new THREE.Mesh(geometry, material.clone());
+      cube.position.set(
+        (Math.random() - 0.5) * 20,
+        Math.random() * 5 + 2,
+        (Math.random() - 0.5) * 20
+      );
+      cube.userData.floatOffset = Math.random() * Math.PI * 2;
+      cube.userData.isRandomCube = true;
+      this.boardPreviewScene.add(cube);
+    }
+  }
+
+  show3DBoardPreview(boardId) {
+    if (!this.boardPreviewScene) return;
+    this.showPreviewPlaceholder();
+
+    // Create a simple 3D representation of the board
+    const themeColors = {
+      'tropical_paradise': { ground: 0xf4d35e, accent: 0x2ec4b6, fog: 0x87ceeb },
+      'crystal_caves': { ground: 0x4a5568, accent: 0xa855f7, fog: 0x1e1e3f },
+      'haunted_manor': { ground: 0x2d3436, accent: 0x6c5ce7, fog: 0x1a1a2e },
+      'sky_kingdom': { ground: 0xdfe6e9, accent: 0x74b9ff, fog: 0x81ecec }
+    };
+
+    const colors = themeColors[boardId] || { ground: 0x55efc4, accent: 0x6c5ce7, fog: 0x2d3436 };
+    this.boardPreviewScene.background = new THREE.Color(colors.fog);
+
+    // Ground plane
+    const groundGeo = new THREE.PlaneGeometry(30, 30);
+    const groundMat = new THREE.MeshPhongMaterial({ color: colors.ground, side: THREE.DoubleSide });
+    const ground = new THREE.Mesh(groundGeo, groundMat);
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = -0.1;
+    this.boardPreviewScene.add(ground);
+
+    // Create sample path tiles
+    const tileGeo = new THREE.CylinderGeometry(1, 1, 0.3, 6);
+    const tileMat = new THREE.MeshPhongMaterial({ color: colors.accent });
+    
+    // Create a winding path
+    const pathPoints = [
+      [0, 0], [3, 0], [6, 1], [8, 3], [8, 6], [6, 8], [3, 8], [0, 6], [-2, 4], [-2, 2]
+    ];
+    
+    pathPoints.forEach(([x, z], i) => {
+      const tile = new THREE.Mesh(tileGeo, tileMat.clone());
+      tile.position.set(x - 3, 0.15, z - 4);
+      tile.userData.originalY = 0.15;
+      tile.userData.tileIndex = i;
+      this.boardPreviewScene.add(tile);
+    });
+
+    // Add some decorative elements based on theme
+    this.addBoardDecorations(boardId, colors);
+  }
+
+  addBoardDecorations(boardId, colors) {
+    if (!this.boardPreviewScene) return;
+
+    const decorGeo = new THREE.ConeGeometry(0.5, 1.5, 4);
+    const decorMat = new THREE.MeshPhongMaterial({ color: colors.accent });
+
+    // Add 8 decorative elements around the edges
+    for (let i = 0; i < 8; i++) {
+      const angle = (i / 8) * Math.PI * 2;
+      const decor = new THREE.Mesh(decorGeo, decorMat.clone());
+      decor.position.set(
+        Math.cos(angle) * 12,
+        0.75,
+        Math.sin(angle) * 12
+      );
+      decor.userData.floatOffset = i;
+      this.boardPreviewScene.add(decor);
+    }
+  }
+
+  animateBoardPreview() {
+    if (!this.boardPreviewRenderer || !this.boardPreviewScene || !this.boardPreviewCamera) return;
+
+    const animate = () => {
+      this.boardPreviewAnimationId = requestAnimationFrame(animate);
+
+      // Rotate camera around the scene
+      const time = Date.now() * 0.0005;
+      this.boardPreviewCamera.position.x = Math.cos(time) * 25;
+      this.boardPreviewCamera.position.z = Math.sin(time) * 25;
+      this.boardPreviewCamera.lookAt(0, 0, 0);
+
+      // Animate tiles
+      this.boardPreviewScene.traverse(obj => {
+        if (obj.isMesh && obj.userData.tileIndex !== undefined) {
+          obj.position.y = obj.userData.originalY + Math.sin(Date.now() * 0.003 + obj.userData.tileIndex * 0.5) * 0.2;
+        }
+        if (obj.isMesh && obj.userData.floatOffset !== undefined) {
+          obj.rotation.y = Date.now() * 0.001 + obj.userData.floatOffset;
+        }
+        if (obj.isMesh && obj.userData.isRandomCube) {
+          obj.rotation.x = Date.now() * 0.001;
+          obj.rotation.y = Date.now() * 0.002;
+          obj.position.y = 3 + Math.sin(Date.now() * 0.002 + obj.userData.floatOffset) * 2;
+        }
+      });
+
+      this.boardPreviewRenderer.render(this.boardPreviewScene, this.boardPreviewCamera);
+    };
+
+    animate();
+  }
+
+  cleanup3DPreview() {
+    if (this.boardPreviewAnimationId) {
+      cancelAnimationFrame(this.boardPreviewAnimationId);
+      this.boardPreviewAnimationId = null;
+    }
+    if (this.boardPreviewScene) {
+      this.boardPreviewScene.traverse(obj => {
+        if (obj.geometry) obj.geometry.dispose();
+        if (obj.material) {
+          if (Array.isArray(obj.material)) {
+            obj.material.forEach(m => m.dispose());
+          } else {
+            obj.material.dispose();
+          }
+        }
+      });
+      this.boardPreviewScene = null;
+    }
+    if (this.boardPreviewRenderer) {
+      this.boardPreviewRenderer.dispose();
+      this.boardPreviewRenderer = null;
     }
   }
 
   startVotingTimer(duration) {
+    // Clear any existing timer first
+    if (this.votingTimer) {
+      clearInterval(this.votingTimer);
+      this.votingTimer = null;
+    }
+
     let remaining = duration;
     const timerEl = document.getElementById('vote-timer');
+    const timerContainer = document.getElementById('voting-timer');
 
     const update = () => {
       if (timerEl) {
         timerEl.textContent = remaining;
       }
       
+      // Add urgency class when time is low
+      if (timerContainer) {
+        timerContainer.classList.toggle('urgent', remaining <= 10);
+      }
+      
       if (remaining <= 0) {
         clearInterval(this.votingTimer);
+        this.votingTimer = null;
+        // Auto-submit vote if not already voted, or trigger timeout
+        this.onVotingTimeout();
         return;
       }
       
       remaining--;
     };
 
+    // Initial update
     update();
+    // Start interval
     this.votingTimer = setInterval(update, 1000);
   }
 
+  onVotingTimeout() {
+    // If player hasn't voted, auto-vote for random
+    if (!this.selectedVote) {
+      this.castVote('random');
+      this.app.ui.showToast('Time\'s up! Random board selected.', 'info');
+    }
+  }
+
   castVote(optionId) {
+    // If already voted for this, do nothing
+    if (this.selectedVote === optionId && this.hasSubmittedVote) return;
+
     this.selectedVote = optionId;
+    this.hasSubmittedVote = true;
     
     // Update UI
     document.querySelectorAll('.vote-option').forEach(option => {
       option.classList.toggle('selected', option.dataset.voteId === optionId);
     });
 
-    // Send to server (vote:board is the expected event on server)
-    this.app.socket.socket.emit('vote:board', optionId, (response) => {
+    // Resolve random to actual board if needed
+    let actualVote = optionId;
+    if (optionId === 'random' && this.votingData.options) {
+      const randomIndex = Math.floor(Math.random() * this.votingData.options.length);
+      actualVote = this.votingData.options[randomIndex].id;
+    }
+
+    // Send to server
+    this.app.socket.socket.emit('vote:board', actualVote, (response) => {
       if (!response.success) {
         this.app.ui.showToast(response.error || 'Failed to cast vote', 'error');
+        this.hasSubmittedVote = false;
+      } else {
+        this.app.ui.showToast('Vote cast!', 'success');
       }
     });
     this.app.audio.playSFX('click');
@@ -1134,38 +1468,64 @@ export class LobbyController {
   }
 
   onVotingResult(data) {
+    // Cleanup 3D preview
+    this.cleanup3DPreview();
+
     if (this.votingTimer) {
       clearInterval(this.votingTimer);
+      this.votingTimer = null;
     }
+
+    // Store selected board for later use
+    this.selectedBoard = data.winner;
+    this.selectedBoardName = data.winnerName;
 
     // Highlight winner
     document.querySelectorAll('.vote-option').forEach(option => {
+      option.classList.remove('selected');
       option.classList.toggle('winner', option.dataset.voteId === data.winner);
     });
 
     // Show result
     const status = document.getElementById('vote-status');
     if (status) {
-      status.textContent = `Selected: ${data.winnerName}`;
+      status.innerHTML = `<span class="winner-announcement">🏆 ${data.winnerName} wins!</span>`;
     }
 
     this.app.ui.showToast(`${data.winnerName} selected!`, 'success');
+    this.app.audio.playSFX('success');
 
-    // Show start game button for host
-    const startBtn = document.getElementById('start-actual-game-btn');
-    if (startBtn && this.isHost) {
-      startBtn.classList.remove('hidden');
-      startBtn.addEventListener('click', () => {
-        this.startActualGame();
-      });
-    }
+    // After a short delay, show "Enter Board" button for host
+    // New flow: Vote → Enter Board → Board Intro (cinematic showing board features) → Game
+    setTimeout(() => {
+      const startBtn = document.getElementById('start-actual-game-btn');
+      if (startBtn && this.isHost) {
+        startBtn.textContent = `Enter ${data.winnerName} →`;
+        startBtn.classList.remove('hidden');
+        startBtn.onclick = () => {
+          this.enterBoard(data.winner, data.winnerName);
+        };
+      } else if (startBtn) {
+        // Non-host players see waiting message
+        startBtn.textContent = 'Waiting for host...';
+        startBtn.classList.remove('hidden');
+        startBtn.classList.add('btn-disabled');
+        startBtn.disabled = true;
+      }
+    }, 1500);
   }
 
-  startActualGame() {
+  enterBoard(boardId, boardName) {
+    // Tell server we're ready to start the game
+    this.app.ui.showLoading(`Entering ${boardName}...`);
+    
     this.app.socket.socket.emit('vote:readyToStart', (response) => {
+      this.app.ui.hideLoading();
       if (!response.success) {
-        this.app.ui.showToast(response.error || 'Failed to start game', 'error');
+        this.app.ui.showToast(response.error || 'Failed to enter board', 'error');
       }
+      // Server will emit game:started which will navigate to game screen
+      // The game screen will then show the board intro
     });
     this.app.audio.playSFX('click');
   }

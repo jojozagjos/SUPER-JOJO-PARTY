@@ -130,12 +130,15 @@ window.addEventListener('error', (event) => {
   console.error('Global error:', event.error);
   
   // Check if it's a WebGL error
-  const errorMsg = event.error?.message || event.message || '';
-  if (errorMsg.toLowerCase().includes('webgl') || 
-      errorMsg.toLowerCase().includes('context') ||
-      errorMsg.toLowerCase().includes('three')) {
+  const errorMsg = (event.error?.message || event.message || '').toLowerCase();
+  // Only treat errors that explicitly reference WebGL/context failures as fatal to WebGL support.
+  if (errorMsg.includes('webgl') || errorMsg.includes('context') || errorMsg.includes('failed to create')) {
     console.error('🚨 WebGL-related error detected!');
     showWebGLBlocker();
+  } else {
+    // Non-WebGL Three.js errors (missing classes, etc.) are coding/runtime issues,
+    // do not assume the device lacks WebGL — log for debugging instead.
+    console.warn('Non-WebGL error occurred (not blocking):', errorMsg || event.error || event.message);
   }
 });
 

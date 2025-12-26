@@ -160,6 +160,7 @@ export class SocketManager {
     this.socket.on('lobby:votingStarted', (data) => {
       console.log('Voting started:', data);
       this.app.ui.hideLoading();
+      // Pass the full data object which contains options, duration, title, etc.
       this.app.navigateTo('voting', data);
     });
 

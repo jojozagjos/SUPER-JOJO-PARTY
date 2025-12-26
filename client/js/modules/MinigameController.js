@@ -274,17 +274,57 @@ export class MinigameController {
       this.camera.lookAt(0, 0, 0);
 
       // Create renderer with error handling
-      this.renderer = new THREE.WebGLRenderer({
-        canvas: this.canvas,
-        antialias: true,
-        alpha: true,
-        failIfMajorPerformanceCaveat: false,
-        powerPreference: 'default'
-      });
-      this.renderer.setSize(this.canvas.clientWidth, this.canvas.clientHeight);
-      this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-      this.renderer.shadowMap.enabled = true;
-      this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        // Attempt robust WebGL context acquisition with several attribute permutations
+        const contextAttempts = [
+          { type: 'webgl2', attrs: { antialias: true, powerPreference: 'high-performance' } },
+          { type: 'webgl', attrs: { antialias: true, powerPreference: 'high-performance' } },
+          { type: 'webgl', attrs: { antialias: false, powerPreference: 'high-performance' } },
+          { type: 'webgl', attrs: { antialias: false, powerPreference: 'default' } },
+          { type: 'experimental-webgl', attrs: { antialias: false } }
+        ];
+
+        let glContext = null;
+        for (const attempt of contextAttempts) {
+          try {
+            glContext = this.canvas.getContext(attempt.type, attempt.attrs);
+            if (glContext) {
+              console.log(`Acquired WebGL context using ${attempt.type} with`, attempt.attrs);
+              break;
+            }
+          } catch (e) {
+            console.warn(`Context attempt ${attempt.type} failed:`, e);
+            glContext = null;
+          }
+        }
+
+        if (!glContext) {
+          console.error('Unable to obtain a WebGL context for the minigame canvas');
+          // Fallback: gracefully degrade to 2D canvas mode for this minigame
+          this.is3D = false;
+          this.app?.ui?.showToast('WebGL context could not be created for minigames on this device. Switching to 2D fallback.', 'warning');
+          return;
+        }
+
+        // Create renderer using the acquired context to avoid repeated context allocation failures
+        const rendererOptions = {
+          canvas: this.canvas,
+          context: glContext,
+          antialias: Boolean(glContext.getContextAttributes?.().antialias),
+          alpha: true,
+          failIfMajorPerformanceCaveat: false
+        };
+
+        this.renderer = new THREE.WebGLRenderer(rendererOptions);
+        // If renderer creation still fails, catch below
+        this.renderer.setSize(Math.max(1, this.canvas.clientWidth), Math.max(1, this.canvas.clientHeight));
+        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+        // Try enabling shadow map but don't fail if unsupported
+        try {
+          this.renderer.shadowMap.enabled = true;
+          this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        } catch (e) {
+          console.warn('Shadow map not supported or failed to set:', e);
+        }
     } catch (error) {
       console.error('Failed to create WebGL context:', error);
       this.scene = null;
@@ -479,20 +519,41 @@ export class MinigameController {
 
   createPlayerMesh() {
     // Create a cute character mesh
-    const bodyGeometry = new THREE.CapsuleGeometry(0.5, 1, 8, 16);
-    const bodyMaterial = new THREE.MeshStandardMaterial({
-      color: 0x6c5ce7,
-      metalness: 0.1,
-      roughness: 0.8
-    });
-    
     this.playerMesh = new THREE.Group();
-    
-    // Body
-    const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
-    body.position.y = 1;
-    body.castShadow = true;
-    this.playerMesh.add(body);
+
+    // Prefer CapsuleGeometry when available, otherwise compose from cylinder + spheres
+    if (typeof THREE.CapsuleGeometry === 'function') {
+      const bodyGeometry = new THREE.CapsuleGeometry(0.5, 1, 8, 16);
+      const bodyMaterial = new THREE.MeshStandardMaterial({
+        color: 0x6c5ce7,
+        metalness: 0.1,
+        roughness: 0.8
+      });
+      const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+      body.position.y = 1;
+      body.castShadow = true;
+      this.playerMesh.add(body);
+    } else {
+      const bodyMaterial = new THREE.MeshStandardMaterial({
+        color: 0x6c5ce7,
+        metalness: 0.1,
+        roughness: 0.8
+      });
+      const cyl = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 1, 16), bodyMaterial.clone());
+      cyl.position.y = 1;
+      cyl.castShadow = true;
+      this.playerMesh.add(cyl);
+
+      const top = new THREE.Mesh(new THREE.SphereGeometry(0.5, 12, 12), bodyMaterial.clone());
+      top.position.y = 1.6;
+      top.castShadow = true;
+      this.playerMesh.add(top);
+
+      const bottom = new THREE.Mesh(new THREE.SphereGeometry(0.5, 12, 12), bodyMaterial.clone());
+      bottom.position.y = 0.4;
+      bottom.castShadow = true;
+      this.playerMesh.add(bottom);
+    }
     
     // Eyes
     const eyeGeometry = new THREE.SphereGeometry(0.15, 16, 16);
@@ -677,20 +738,45 @@ export class MinigameController {
     const colors = [0x00cec9, 0xfd79a8, 0xfdcb6e];
     const colorIndex = parseInt(bot.id.split('_')[1]) % colors.length;
     
-    const bodyGeometry = new THREE.CapsuleGeometry(0.5, 1, 8, 16);
-    const bodyMaterial = new THREE.MeshStandardMaterial({
-      color: colors[colorIndex],
-      metalness: 0.1,
-      roughness: 0.8
-    });
-    
-    const mesh = new THREE.Group();
-    
-    // Body
-    const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
-    body.position.y = 1;
-    body.castShadow = true;
-    mesh.add(body);
+    let mesh = new THREE.Group();
+
+    // Prefer THREE.CapsuleGeometry when available, otherwise build a composite capsule (cylinder + spheres)
+    if (typeof THREE.CapsuleGeometry === 'function') {
+      const bodyGeometry = new THREE.CapsuleGeometry(0.5, 1, 8, 16);
+      const bodyMaterial = new THREE.MeshStandardMaterial({
+        color: colors[colorIndex],
+        metalness: 0.1,
+        roughness: 0.8
+      });
+      const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+      body.position.y = 1;
+      body.castShadow = true;
+      mesh.add(body);
+    } else {
+      // Fallback composite capsule
+      const cylGeo = new THREE.CylinderGeometry(0.5, 0.5, 1, 16);
+      const sphGeo = new THREE.SphereGeometry(0.5, 12, 12);
+      const bodyMaterial = new THREE.MeshStandardMaterial({
+        color: colors[colorIndex],
+        metalness: 0.1,
+        roughness: 0.8
+      });
+
+      const cylinder = new THREE.Mesh(cylGeo, bodyMaterial.clone());
+      cylinder.position.y = 1;
+      cylinder.castShadow = true;
+      mesh.add(cylinder);
+
+      const top = new THREE.Mesh(sphGeo, bodyMaterial.clone());
+      top.position.y = 1.6;
+      top.castShadow = true;
+      mesh.add(top);
+
+      const bottom = new THREE.Mesh(sphGeo, bodyMaterial.clone());
+      bottom.position.y = 0.4;
+      bottom.castShadow = true;
+      mesh.add(bottom);
+    }
     
     // Eyes (robot style)
     const eyeGeometry = new THREE.BoxGeometry(0.2, 0.1, 0.1);
