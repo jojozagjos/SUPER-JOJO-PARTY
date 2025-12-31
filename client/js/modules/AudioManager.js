@@ -14,6 +14,10 @@ export class AudioManager {
     this.sfxGain = null;
     this.voiceGain = null;
     
+    // Positional audio
+    this.listener = null;
+    this.positionalSources = new Map();
+    
     // Current music
     this.currentMusic = null;
     this.musicSource = null;
@@ -28,6 +32,14 @@ export class AudioManager {
     
     // Audio buffers cache
     this.buffers = new Map();
+    
+    // Preload queue
+    this.preloadQueue = [
+      'click', 'success', 'coin', 'diceRoll', 'star'
+    ];
+    
+    // Ducking state
+    this.isDucking = false;
     
     // SFX definitions (will be generated procedurally)
     this.sfxDefinitions = {
@@ -111,6 +123,29 @@ export class AudioManager {
     this.voiceGain = this.audioContext.createGain();
     this.voiceGain.connect(this.masterGain);
     this.voiceGain.gain.value = this.volumes.voice / 100;
+    
+    // Positional audio listener
+    this.listener = this.audioContext.listener;
+    if (this.listener.positionX) {
+      this.listener.positionX.value = 0;
+      this.listener.positionY.value = 0;
+      this.listener.positionZ.value = 0;
+    } else {
+      this.listener.setPosition(0, 0, 0);
+    }
+    
+    // Preload critical sounds
+    this.preloadSounds();
+  }
+  
+  preloadSounds() {
+    // Preload critical SFX to reduce latency
+    this.preloadQueue.forEach(sfxName => {
+      if (this.sfxDefinitions[sfxName]) {
+        // Generate and cache the sound
+        this.playSFX(sfxName, 0); // volume 0 to preload without playing
+      }
+    });
   }
 
   setMasterVolume(value) {
