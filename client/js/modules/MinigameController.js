@@ -220,6 +220,11 @@ export class MinigameController {
     this.isTutorial = data.tutorial || false;
     this.is3D = true; // Always use 3D
     
+    // Load bots if in practice mode
+    if (data.bots) {
+      this.practiceBots = data.bots;
+    }
+    
     // Get canvas
     this.canvas = document.getElementById('minigame-canvas');
     if (this.canvas) {
@@ -229,6 +234,13 @@ export class MinigameController {
 
     // Initialize 3D scene
     this.init3DScene();
+    
+    // Create bot meshes for practice mode
+    if (this.isPractice && this.practiceBots.length > 0) {
+      this.practiceBots.forEach(bot => {
+        this.createBotMesh(bot);
+      });
+    }
 
     // Play cinematic intro
     this.playCinematic(data.minigame);
@@ -1824,12 +1836,46 @@ export class MinigameController {
         this.currentMinigame = data.minigame;
         this.is3D = true; // Always 3D
         
+        // Create practice bots (AI opponents)
+        const botCount = 2 + Math.floor(Math.random() * 2); // 2-3 bots
+        this.practiceBots = [];
+        const botNames = ['Bot-1', 'Bot-2', 'Bot-3', 'Bot-4'];
+        const botColors = [0x00cec9, 0xfd79a8, 0xfdcb6e];
+        
+        for (let i = 0; i < botCount; i++) {
+          const bot = {
+            id: `bot_${i}`,
+            username: botNames[i],
+            x: (Math.random() - 0.5) * 20,
+            y: 0,
+            z: (Math.random() - 0.5) * 20,
+            vx: 0,
+            vy: 0,
+            vz: 0,
+            score: 0,
+            alive: true,
+            ai: {
+              targetX: 0,
+              targetZ: 0,
+              changeTimer: 2,
+              difficulty: 'normal'
+            }
+          };
+          this.practiceBots.push(bot);
+        }
+        
         // Navigate to minigame screen
-        this.app.navigateTo('minigame', { minigame: data.minigame, practice: true });
+        this.app.navigateTo('minigame', { 
+          minigame: data.minigame, 
+          practice: true,
+          bots: this.practiceBots
+        });
         
         // Initialize the minigame after navigation
         setTimeout(() => {
-          this.initMinigame({ minigame: data.minigame, practice: true });
+          this.initMinigame({ minigame: data.minigame, practice: true, bots: this.practiceBots });
+          this.isPlaying = true;
+          this.startGameLoop();
         }, 100);
       })
       .catch(err => {
