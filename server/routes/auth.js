@@ -174,6 +174,11 @@ export function setupAuthRoutes(app, db) {
         }
       });
     } catch (error) {
+      // Handle expired token explicitly for clearer client behavior
+      if (error && error.name === 'TokenExpiredError') {
+        console.warn('Validate error - token expired:', error.expiredAt);
+        return res.status(401).json({ valid: false, expired: true, expiredAt: error.expiredAt });
+      }
       console.error('Validate error:', error);
       res.status(401).json({ valid: false });
     }
@@ -261,6 +266,9 @@ export function authMiddleware() {
       req.token = token;
       next();
     } catch (error) {
+      if (error && error.name === 'TokenExpiredError') {
+        return res.status(401).json({ error: 'Token expired', expired: true, expiredAt: error.expiredAt });
+      }
       return res.status(401).json({ error: 'Invalid token' });
     }
   };
