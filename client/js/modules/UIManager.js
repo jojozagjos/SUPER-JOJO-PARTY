@@ -1053,10 +1053,12 @@ export class UIManager {
         purchaseBtn.innerHTML = 'Equip';
         purchaseBtn.classList.add('owned');
         purchaseBtn.disabled = false;
-        purchaseBtn.onclick = () => {
+        purchaseBtn.removeEventListener('click', purchaseBtn._equipHandler);
+        purchaseBtn._equipHandler = () => {
           this.equipItem(item.id, item.type);
           modal.classList.remove('active');
         };
+        purchaseBtn.addEventListener('click', purchaseBtn._equipHandler);
       }
     } else if (this.app.state.user?.isGuest) {
       purchaseBtn.innerHTML = '🔒 Account Required';
@@ -1064,15 +1066,27 @@ export class UIManager {
     } else {
       const priceText = item.price === 0 ? 'Free' : `${item.price} 💎`;
       purchaseBtn.innerHTML = item.price === 0 ? 'Claim Free!' : `Buy for <span id="preview-price">${item.price}</span> 💎`;
-      purchaseBtn.onclick = () => {
+      purchaseBtn.removeEventListener('click', purchaseBtn._buyHandler);
+      purchaseBtn._buyHandler = () => {
         this.purchaseItem(item.id, item.type);
         modal.classList.remove('active');
       };
+      purchaseBtn.addEventListener('click', purchaseBtn._buyHandler);
     }
 
     // Close button handler
-    document.getElementById('preview-close-btn').onclick = () => modal.classList.remove('active');
-    modal.querySelector('.modal-close').onclick = () => modal.classList.remove('active');
+    const closeBtn = document.getElementById('preview-close-btn');
+    if (closeBtn) {
+      closeBtn.removeEventListener('click', closeBtn._closeHandler);
+      closeBtn._closeHandler = () => modal.classList.remove('active');
+      closeBtn.addEventListener('click', closeBtn._closeHandler);
+    }
+    const modalCloseBtn = modal.querySelector('.modal-close');
+    if (modalCloseBtn) {
+      modalCloseBtn.removeEventListener('click', modalCloseBtn._closeHandler);
+      modalCloseBtn._closeHandler = () => modal.classList.remove('active');
+      modalCloseBtn.addEventListener('click', modalCloseBtn._closeHandler);
+    }
 
     // Show modal
     modal.classList.add('active');
@@ -1532,16 +1546,20 @@ export class UIManager {
     const returnBtn = document.getElementById('return-to-menu');
     
     if (rematchBtn) {
-      rematchBtn.onclick = () => {
+      rematchBtn.removeEventListener('click', rematchBtn._rematchHandler);
+      rematchBtn._rematchHandler = () => {
         this.app.lobby.requestRematch();
       };
+      rematchBtn.addEventListener('click', rematchBtn._rematchHandler);
     }
     
     if (returnBtn) {
-      returnBtn.onclick = () => {
+      returnBtn.removeEventListener('click', returnBtn._returnHandler);
+      returnBtn._returnHandler = () => {
         this.app.navigateTo('main-menu');
         this.app.audio.playMusic('menu');
       };
+      returnBtn.addEventListener('click', returnBtn._returnHandler);
     }
   }
 
