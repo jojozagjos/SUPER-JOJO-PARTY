@@ -13,6 +13,10 @@ export class GameEngine {
     this.renderer = null;
     this.controls = null;
     
+    // Texture cache and loader
+    this.textureCache = new Map();
+    this.textureLoader = null;
+    
     // Game state
     this.gameState = null;
     this.players = [];
@@ -323,6 +327,9 @@ export class GameEngine {
       console.error('Game canvas not found');
       return;
     }
+
+    // Initialize texture loader
+    this.textureLoader = new THREE.TextureLoader();
 
     // Scene
     this.scene = new THREE.Scene();
@@ -1540,11 +1547,202 @@ export class GameEngine {
     });
   }
 
+  // Texture management
+  loadTexture(path, onLoad, onError) {
+    // Check cache first
+    if (this.textureCache.has(path)) {
+      const cached = this.textureCache.get(path);
+      if (onLoad) onLoad(cached);
+      return cached;
+    }
+
+    // Load new texture
+    if (!this.textureLoader) {
+      this.textureLoader = new THREE.TextureLoader();
+    }
+
+    this.textureLoader.load(
+      path,
+      (texture) => {
+        this.textureCache.set(path, texture);
+        if (onLoad) onLoad(texture);
+      },
+      undefined,
+      (error) => {
+        console.warn(`Failed to load texture: ${path}`, error);
+        if (onError) onError(error);
+      }
+    );
+  }
+
+  preloadBoardTextures(boardId) {
+    const texturePaths = [
+      `/assets/textures/boards/${boardId}/ground.png`,
+      `/assets/textures/boards/${boardId}/decoration.png`,
+      `/assets/boards/${boardId}/preview.png`
+    ];
+
+    const promises = texturePaths.map(path => {
+      return new Promise((resolve) => {
+        this.loadTexture(path, resolve, () => resolve(null));
+      });
+    });
+
+    return Promise.all(promises);
+  }
+
+  getBoardThemeData(boardId) {
+    const themes = {
+      tropical_paradise: {
+        backgroundColor: 0x87ceeb,
+        fogColor: 0xa4d8f0,
+        groundColor: 0xf4d35e,
+        accentColor: 0x2ec4b6,
+        ambientLight: 0xfff8dc,
+        sunColor: 0xffa500,
+        particleColor: 0x00ffff,
+        mechanic: 'tide'
+      },
+      crystal_caves: {
+        backgroundColor: 0x1e1e3f,
+        fogColor: 0x2a2a5f,
+        groundColor: 0x4a5568,
+        accentColor: 0xa855f7,
+        ambientLight: 0x8b5cf6,
+        sunColor: 0xc084fc,
+        particleColor: 0xfbbf24,
+        mechanic: 'crystals'
+      },
+      haunted_manor: {
+        backgroundColor: 0x1a1a2e,
+        fogColor: 0x16213e,
+        groundColor: 0x2d3436,
+        accentColor: 0x6c5ce7,
+        ambientLight: 0x4a5568,
+        sunColor: 0x8b92a7,
+        particleColor: 0x34d399,
+        mechanic: 'ghosts'
+      },
+      sky_kingdom: {
+        backgroundColor: 0x81ecec,
+        fogColor: 0xa4d8f0,
+        groundColor: 0xdfe6e9,
+        accentColor: 0x74b9ff,
+        ambientLight: 0xffffff,
+        sunColor: 0xffeaa7,
+        particleColor: 0xffffff,
+        mechanic: 'wind'
+      }
+    };
+
+    return themes[boardId] || themes.tropical_paradise;
+  }
+
+  applyBoardMechanic(boardId, player) {
+    const theme = this.getBoardThemeData(boardId);
+    
+    switch (theme.mechanic) {
+      case 'tide':
+        // Tide mechanic - affects path availability every 3 turns
+        if (this.gameState.turn % 3 === 0) {
+          this.triggerTideEffect();
+        }
+        break;
+      
+      case 'crystals':
+        // Crystal spaces give random bonuses
+        if (player.currentSpace?.type === 'BLUE' && Math.random() < 0.2) {
+          this.triggerCrystalBonus(player);
+        }
+        break;
+      
+      case 'ghosts':
+        // Ghost spaces can steal coins
+        if (player.currentSpace?.type === 'EVENT' && Math.random() < 0.3) {
+          this.triggerGhostEffect(player);
+        }
+        break;
+      
+      case 'wind':
+        // Wind gusts push players extra spaces
+        if (Math.random() < 0.15) {
+          this.triggerWindGust(player);
+        }
+        break;
+    }
+  }
+
+  triggerTideEffect() {
+    this.app.ui.showMessage('🌊 The tide is changing! Some paths have shifted!', 'info');
+    // Visual effect
+    this.createWaveParticles();
+  }
+
+  triggerCrystalBonus(player) {
+    const bonus = Math.floor(Math.random() * 5) + 3;
+    this.app.ui.showMessage(`💎 Crystal Bonus! +${bonus} coins!`, 'success');
+    this.app.socket.socket.emit('game:addCoins', { amount: bonus });
+  }
+
+  triggerGhostEffect(player) {
+    const stolen = Math.floor(Math.random() * 5) + 2;
+    this.app.ui.showMessage(`👻 A ghost steals ${stolen} coins!`, 'warning');
+    this.app.socket.socket.emit('game:removeCoins', { amount: stolen });
+  }
+
+  triggerWindGust(player) {
+    const push = Math.random() < 0.5 ? 2 : -1;
+    const direction = push > 0 ? 'forward' : 'backward';
+    this.app.ui.showMessage(`💨 Wind gust! Pushed ${Math.abs(push)} spaces ${direction}!`, 'info');
+    // Server handles actual movement
+  }
+
+  createWaveParticles() {
+    // Create wave effect particles
+    for (let i = 0; i < 20; i++) {
+      const geometry = new THREE.SphereGeometry(0.3, 8, 8);
+      const material = new THREE.MeshBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0.6 });
+      const particle = new THREE.Mesh(geometry, material);
+      
+      const angle = (i / 20) * Math.PI * 2;
+      particle.position.set(
+        Math.cos(angle) * 15,
+        0.5,
+        Math.sin(angle) * 15
+      );
+      
+      this.scene.add(particle);
+      
+      // Animate and remove
+      let frame = 0;
+      const animate = () => {
+        frame++;
+        particle.position.y += 0.1;
+        particle.material.opacity = 1 - (frame / 60);
+        
+        if (frame < 60) {
+          requestAnimationFrame(animate);
+        } else {
+          this.scene.remove(particle);
+          particle.geometry.dispose();
+          particle.material.dispose();
+        }
+      };
+      animate();
+    }
+  }
+
   // Cleanup
   destroy() {
     if (this.renderer) {
       this.renderer.dispose();
     }
+    
+    // Dispose all cached textures
+    this.textureCache.forEach(texture => {
+      if (texture && texture.dispose) texture.dispose();
+    });
+    this.textureCache.clear();
     
     this.scene?.traverse(obj => {
       if (obj.geometry) obj.geometry.dispose();

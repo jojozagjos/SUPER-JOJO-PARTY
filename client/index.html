@@ -435,13 +435,15 @@
           <span id="vote-timer">30</span>s
         </div>
         
-        <div class="voting-options" id="voting-options">
+        <div class="voting-options" id="voting-options" role="radiogroup" aria-label="Board selection">
           <!-- Voting options will be inserted here -->
         </div>
         
-        <div class="vote-status" id="vote-status">
+        <div class="vote-status" id="vote-status" aria-live="polite" aria-atomic="true">
           Waiting for votes...
         </div>
+        
+        <div class="sr-only" id="vote-announcer" aria-live="assertive" aria-atomic="true"></div>
         
         <button class="btn btn-primary btn-large hidden" id="start-actual-game-btn">Start Game!</button>
       </div>

@@ -1082,12 +1082,19 @@ export class LobbyController {
       ];
 
       options.innerHTML = allOptions.map(option => `
-        <div class="vote-option${option.isRandom ? ' random-option' : ''}" data-vote-id="${option.id}">
+        <div
+          class="vote-option${option.isRandom ? ' random-option' : ''}"
+          data-vote-id="${option.id}"
+          role="radio"
+          tabindex="0"
+          aria-checked="false"
+          aria-label="${this.escapeHtml(option.name)}"
+        >
           <div class="option-preview">
             ${option.isRandom 
               ? '<div class="random-dice">🎲</div>'
-              : `<img src="${option.icon}" alt="${this.escapeHtml(option.name)}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
-                 <div class="preview-fallback" style="display:none;">🗺️</div>`
+              : `<img src="${option.icon}" alt="${this.escapeHtml(option.name)}">
+                 <div class="preview-fallback" style="display:flex;">🗺️</div>`
             }
           </div>
           <div class="option-name">${this.escapeHtml(option.name)}</div>
@@ -1096,11 +1103,48 @@ export class LobbyController {
         </div>
       `).join('');
 
-      // Add click handlers
-      options.querySelectorAll('.vote-option').forEach(optionEl => {
+      // Add click handlers and keyboard accessibility
+      const optionEls = Array.from(options.querySelectorAll('.vote-option'));
+      optionEls.forEach((optionEl, idx) => {
         optionEl.addEventListener('click', () => {
           const voteId = optionEl.dataset.voteId;
           this.selectVoteOption(voteId);
+        });
+
+        // Keyboard: Enter/Space to select, arrows to navigate
+        optionEl.addEventListener('keydown', (ev) => {
+          if (ev.key === 'Enter' || ev.key === ' ') {
+            ev.preventDefault();
+            const voteId = optionEl.dataset.voteId;
+            this.selectVoteOption(voteId);
+          } else if (ev.key === 'ArrowRight' || ev.key === 'ArrowDown') {
+            ev.preventDefault();
+            const next = optionEls[(idx + 1) % optionEls.length];
+            next?.focus();
+          } else if (ev.key === 'ArrowLeft' || ev.key === 'ArrowUp') {
+            ev.preventDefault();
+            const prev = optionEls[(idx - 1 + optionEls.length) % optionEls.length];
+            prev?.focus();
+          }
+        });
+
+        // Keep ARIA state in sync
+        optionEl.addEventListener('focus', () => {
+          optionEl.classList.add('focused');
+        });
+        optionEl.addEventListener('blur', () => {
+          optionEl.classList.remove('focused');
+        });
+      });
+
+      // Attach image error handlers (avoid inline onerror for CSP)
+      options.querySelectorAll('.option-preview img').forEach(img => {
+        img.addEventListener('error', () => {
+          try {
+            img.style.display = 'none';
+            const fb = img.nextElementSibling;
+            if (fb) fb.style.display = 'flex';
+          } catch (e) {}
         });
       });
     }
@@ -1168,6 +1212,22 @@ export class LobbyController {
       this.boardPreviewRenderer = new THREE.WebGLRenderer({ canvas, antialias: true });
       this.boardPreviewRenderer.setSize(canvas.clientWidth, canvas.clientHeight);
       this.boardPreviewRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      // Resize handler to keep renderer/camera in sync with CSS-driven canvas size
+      this._onPreviewResize = () => {
+        try {
+          if (!this.boardPreviewRenderer || !this.boardPreviewCamera || !canvas) return;
+          const w = Math.max(64, canvas.clientWidth);
+          const h = Math.max(64, canvas.clientHeight);
+          this.boardPreviewCamera.aspect = w / h;
+          this.boardPreviewCamera.updateProjectionMatrix();
+          this.boardPreviewRenderer.setSize(w, h);
+        } catch (e) {
+          // swallow resize errors
+        }
+      };
+      window.addEventListener('resize', this._onPreviewResize);
+      // call once to ensure correct sizing
+      this._onPreviewResize();
 
       // Add lights
       const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
@@ -1204,13 +1264,24 @@ export class LobbyController {
   selectVoteOption(voteId) {
     this.selectedVote = voteId;
     
-    // Update UI selection
+    // Update UI selection and ARIA states
     document.querySelectorAll('.vote-option').forEach(option => {
-      option.classList.toggle('selected', option.dataset.voteId === voteId);
+      const isSelected = option.dataset.voteId === voteId;
+      option.classList.toggle('selected', isSelected);
+      option.setAttribute('aria-checked', isSelected ? 'true' : 'false');
     });
 
     // Update 3D preview
     this.updateBoardPreview(voteId);
+
+    // Announce selection to screen readers
+    const announcer = document.getElementById('vote-announcer');
+    const option = this.votingData.options?.find(o => o.id === voteId);
+    if (announcer && option) {
+      announcer.textContent = `Selected ${option.name}`;
+    } else if (announcer && voteId === 'random') {
+      announcer.textContent = 'Selected Random Board';
+    }
 
     // Play sound
     this.app.audio.playSFX('click');
@@ -1299,6 +1370,26 @@ export class LobbyController {
 
     // Add some decorative elements based on theme
     this.addBoardDecorations(boardId, colors);
+
+    // After adding geometry, compute a good camera fit for this board
+    try {
+      const preset = {
+        tropical_paradise: { tilt: 0.35, distanceScale: 1.1, speed: 0.6 },
+        crystal_caves: { tilt: 0.25, distanceScale: 1.3, speed: 0.45 },
+        haunted_manor: { tilt: 0.4, distanceScale: 0.9, speed: 0.5 },
+        sky_kingdom: { tilt: 0.2, distanceScale: 1.6, speed: 0.55 }
+      }[boardId] || { tilt: 0.35, distanceScale: 1.1, speed: 0.5 };
+
+      const fit = this.computePreviewFit(preset.distanceScale, preset.tilt);
+      this.previewOrbit = {
+        center: fit.center,
+        radius: fit.radius,
+        speed: preset.speed
+      };
+    } catch (e) {
+      // fallback orbit
+      this.previewOrbit = { center: new THREE.Vector3(0, 0, 0), radius: 25, speed: 0.5 };
+    }
   }
 
   addBoardDecorations(boardId, colors) {
@@ -1321,17 +1412,52 @@ export class LobbyController {
     }
   }
 
+  computePreviewFit(distanceScale = 1.1, tilt = 0.35) {
+    // Compute bounding box of preview objects and return center + radius for camera orbit
+    if (!this.boardPreviewScene || !this.boardPreviewCamera) {
+      return { center: new THREE.Vector3(0, 0, 0), radius: 25 };
+    }
+
+    const box = new THREE.Box3();
+    box.setFromObject(this.boardPreviewScene);
+    if (box.isEmpty()) {
+      return { center: new THREE.Vector3(0, 0, 0), radius: 25 };
+    }
+
+    const center = new THREE.Vector3();
+    box.getCenter(center);
+    const size = new THREE.Vector3();
+    box.getSize(size);
+    const maxDim = Math.max(size.x, size.y, size.z, 1);
+
+    const fov = (this.boardPreviewCamera.fov || 45) * (Math.PI / 180);
+    // estimate distance so the box fits in frustum
+    const distance = Math.abs((maxDim / 2) / Math.tan(fov / 2)) * distanceScale;
+
+    // raise center slightly so camera looks slightly downwards
+    center.y += Math.max(size.y * 0.15, 0.5);
+
+    return { center, radius: Math.max(distance, 6) };
+  }
+
   animateBoardPreview() {
     if (!this.boardPreviewRenderer || !this.boardPreviewScene || !this.boardPreviewCamera) return;
 
     const animate = () => {
       this.boardPreviewAnimationId = requestAnimationFrame(animate);
 
-      // Rotate camera around the scene
-      const time = Date.now() * 0.0005;
-      this.boardPreviewCamera.position.x = Math.cos(time) * 25;
-      this.boardPreviewCamera.position.z = Math.sin(time) * 25;
-      this.boardPreviewCamera.lookAt(0, 0, 0);
+      // Rotate camera around the computed preview orbit (center + radius)
+      const time = Date.now() * 0.001;
+      const orbit = this.previewOrbit || { center: new THREE.Vector3(0, 0, 0), radius: 25, speed: 0.5 };
+      const angle = time * orbit.speed;
+      const cx = orbit.center.x;
+      const cz = orbit.center.z;
+      const cy = orbit.center.y;
+      this.boardPreviewCamera.position.x = cx + Math.cos(angle) * orbit.radius;
+      this.boardPreviewCamera.position.z = cz + Math.sin(angle) * orbit.radius;
+      // keep camera slightly above center for better framing
+      this.boardPreviewCamera.position.y = cy + Math.max(orbit.radius * 0.25, 6);
+      this.boardPreviewCamera.lookAt(orbit.center.x, orbit.center.y, orbit.center.z);
 
       // Animate tiles
       this.boardPreviewScene.traverse(obj => {
@@ -1373,9 +1499,17 @@ export class LobbyController {
       this.boardPreviewScene = null;
     }
     if (this.boardPreviewRenderer) {
+      try {
+        if (this._onPreviewResize) {
+          window.removeEventListener('resize', this._onPreviewResize);
+          this._onPreviewResize = null;
+        }
+      } catch (e) {}
       this.boardPreviewRenderer.dispose();
       this.boardPreviewRenderer = null;
     }
+    // clear preview orbit data
+    this.previewOrbit = null;
   }
 
   startVotingTimer(duration) {
