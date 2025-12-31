@@ -3,6 +3,8 @@
  * Handles 3D rendering, board visualization, and gameplay
  */
 
+import { Pool, createLowDetailSprite } from './PerformanceUtils.js';
+
 export class GameEngine {
   constructor(app) {
     this.app = app;
@@ -36,6 +38,11 @@ export class GameEngine {
     
     // Particle systems
     this.particles = [];
+
+    // Performance utilities
+    this.particlePool = new Pool();
+    this.lodObjects = [];
+    this.lodThreshold = 35; // meters - simple threshold for switching LOD
   }
 
   initGame(data) {
@@ -488,6 +495,20 @@ export class GameEngine {
       this.addSpaceIndicator(mesh, '⚔️');
     }
 
+    // Create low-detail sprite for LOD
+    try {
+      const color = mesh.material && mesh.material.color ? mesh.material.color.getHex() : 0x808080;
+      const lowSprite = createLowDetailSprite(color);
+      lowSprite.position.set(0, 0.3, 0);
+      lowSprite.visible = false;
+      mesh.add(lowSprite);
+      mesh.userData.lod = { low: lowSprite, high: mesh, threshold: this.lodThreshold };
+      this.lodObjects.push(mesh);
+    } catch (e) {
+      // Non-fatal if sprite creation fails
+      console.warn('Failed to create low-detail sprite for LOD', e);
+    }
+
     return mesh;
   }
 
@@ -541,10 +562,20 @@ export class GameEngine {
   }
 
   addBoardDecorations() {
-    // Add some floating particles/decorations around the board
+    // Add some floating particles/decorations around the board (use pool if possible)
     if (!this.particlesEnabled) return;
 
     const particleCount = this.quality === 'high' ? 100 : 50;
+
+    // Try to reuse a pooled particle system first
+    let particles = this.particlePool.acquire('particles');
+    if (particles) {
+      // Reconfigure if needed
+      this.scene.add(particles);
+      this.particles.push(particles);
+      return;
+    }
+
     const particleGeometry = new THREE.BufferGeometry();
     const positions = new Float32Array(particleCount * 3);
     const colors = new Float32Array(particleCount * 3);
@@ -571,7 +602,7 @@ export class GameEngine {
       opacity: 0.6
     });
 
-    const particles = new THREE.Points(particleGeometry, particleMaterial);
+    particles = new THREE.Points(particleGeometry, particleMaterial);
     particles.userData.isParticle = true;
     this.scene.add(particles);
     this.particles.push(particles);
@@ -760,11 +791,34 @@ export class GameEngine {
       }
       particle.geometry.attributes.position.needsUpdate = true;
     });
+
+    // Update LOD switching each frame (lightweight)
+    this.updateLOD();
   }
 
   render() {
     if (this.renderer && this.scene && this.camera) {
       this.renderer.render(this.scene, this.camera);
+    }
+  }
+
+  updateLOD() {
+    if (!this.camera || !this.lodObjects || this.lodObjects.length === 0) return;
+    const camPos = this.camera.position;
+    for (let i = 0; i < this.lodObjects.length; i++) {
+      const obj = this.lodObjects[i];
+      if (!obj || !obj.userData || !obj.userData.lod) continue;
+      const worldPos = new THREE.Vector3();
+      obj.getWorldPosition(worldPos);
+      const dist = camPos.distanceTo(worldPos);
+      const { low, high, threshold } = obj.userData.lod;
+      if (dist > threshold) {
+        if (high.visible) high.visible = false;
+        if (low && !low.visible) low.visible = true;
+      } else {
+        if (high && !high.visible) high.visible = true;
+        if (low && low.visible) low.visible = false;
+      }
     }
   }
 
@@ -1744,14 +1798,33 @@ export class GameEngine {
     });
     this.textureCache.clear();
     
-    this.scene?.traverse(obj => {
-      if (obj.geometry) obj.geometry.dispose();
-      if (obj.material) {
-        if (Array.isArray(obj.material)) {
-          obj.material.forEach(m => m.dispose());
-        } else {
-          obj.material.dispose();
+    // Release particles to pool where possible, otherwise dispose
+    this.particles.forEach(p => {
+      try {
+        // Remove from scene
+        if (this.scene && p.parent === this.scene) this.scene.remove(p);
+        // Attempt to release to pool for reuse
+        if (this.particlePool) {
+          this.particlePool.release('particles', p);
+          return;
         }
+      } catch (e) {}
+
+      try { if (p.geometry) p.geometry.dispose(); } catch (e) {}
+      try { if (p.material) p.material.dispose(); } catch (e) {}
+    });
+    this.particles = [];
+
+    this.scene?.traverse(obj => {
+      if (obj.geometry) try { obj.geometry.dispose(); } catch (e) {}
+      if (obj.material) {
+        try {
+          if (Array.isArray(obj.material)) {
+            obj.material.forEach(m => { try { m.dispose(); } catch (e) {} });
+          } else {
+            obj.material.dispose();
+          }
+        } catch (e) {}
       }
     });
   }
