@@ -591,77 +591,97 @@ export class GameEngine {
 
   createPlayerMesh(player, index) {
     const colors = [0x6C5CE7, 0x00CEC9, 0xFDCB6E, 0xFF6B6B];
-    const color = colors[index % colors.length] || 0x6C5CE7; // Default color if index is out of bounds
+    const color = colors[index % colors.length] || 0x6C5CE7;
 
-    // Create character group
+    // Create character group (for positioning/animation)
     const group = new THREE.Group();
 
-    // Body (capsule shape) - prefer CapsuleGeometry, otherwise build composite capsule
-    if (typeof THREE.CapsuleGeometry === 'function') {
-      const bodyGeometry = new THREE.CapsuleGeometry(0.3, 0.6, 8, 16);
-      const bodyMaterial = new THREE.MeshStandardMaterial({
-        color,
-        roughness: 0.5,
-        metalness: 0.2
-      });
-      const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
-      body.position.y = 0.5;
-      body.castShadow = true;
-      group.add(body);
-    } else {
-      const bodyMaterial = new THREE.MeshStandardMaterial({
-        color,
-        roughness: 0.5,
-        metalness: 0.2
-      });
+    // Create a 2D character sprite (billboard) with a cute emoji/simple character
+    const charSprite = this.createCharacterSprite(player.username, color);
+    charSprite.position.y = 0;
+    group.add(charSprite);
 
-      const cyl = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.6, 12), bodyMaterial.clone());
-      cyl.position.y = 0.5;
-      cyl.castShadow = true;
-      group.add(cyl);
-
-      const top = new THREE.Mesh(new THREE.SphereGeometry(0.3, 12, 12), bodyMaterial.clone());
-      top.position.y = 0.95;
-      top.castShadow = true;
-      group.add(top);
-
-      const bottom = new THREE.Mesh(new THREE.SphereGeometry(0.3, 12, 12), bodyMaterial.clone());
-      bottom.position.y = 0.05;
-      bottom.castShadow = true;
-      group.add(bottom);
-    }
-
-    // Head
-    const headGeometry = new THREE.SphereGeometry(0.25, 16, 16);
-    const headMaterial = new THREE.MeshStandardMaterial({
-      color: 0xFFDBB6,
-      roughness: 0.7
+    // Add shadow plane under the character
+    const shadowGeometry = new THREE.PlaneGeometry(0.6, 0.3);
+    const shadowMaterial = new THREE.MeshBasicMaterial({
+      color: 0x000000,
+      transparent: true,
+      opacity: 0.3
     });
-    const head = new THREE.Mesh(headGeometry, headMaterial);
-    head.position.y = 1.1;
-    head.castShadow = true;
-    group.add(head);
+    const shadow = new THREE.Mesh(shadowGeometry, shadowMaterial);
+    shadow.rotation.x = -Math.PI / 2;
+    shadow.position.y = 0.01;
+    group.add(shadow);
 
-    // Eyes
-    const eyeGeometry = new THREE.SphereGeometry(0.05, 8, 8);
-    const eyeMaterial = new THREE.MeshBasicMaterial({ color: 0x000000 });
-    
-    const leftEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
-    leftEye.position.set(-0.08, 1.15, 0.2);
-    group.add(leftEye);
-
-    const rightEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
-    rightEye.position.set(0.08, 1.15, 0.2);
-    group.add(rightEye);
-
-    // Name tag
-    const nameTag = this.createNameTag(player.username, color);
-    nameTag.position.y = 1.6;
-    group.add(nameTag);
-
-    group.userData = { playerId: player.id, playerData: player };
+    group.userData = { playerId: player.id, playerData: player, sprite: charSprite };
     
     return group;
+  }
+
+  createCharacterSprite(username, color) {
+    // Create a 2D character sprite with simple, cute style
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 512;
+    const ctx = canvas.getContext('2d');
+
+    // Transparent background
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Character body color
+    const colorStr = `#${color.toString(16).padStart(6, '0')}`;
+
+    // Draw simple cute character
+    // Head
+    ctx.fillStyle = '#FFE4C4';
+    ctx.beginPath();
+    ctx.arc(128, 100, 60, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Body
+    ctx.fillStyle = colorStr;
+    ctx.fillRect(80, 160, 96, 140);
+    ctx.fillRect(70, 300, 116, 80);
+
+    // Arms
+    ctx.fillRect(40, 180, 40, 100);
+    ctx.fillRect(176, 180, 40, 100);
+
+    // Eyes
+    ctx.fillStyle = '#000000';
+    ctx.beginPath();
+    ctx.arc(110, 80, 12, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(146, 80, 12, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Smile
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(128, 110, 25, 0, Math.PI);
+    ctx.stroke();
+
+    // Username text at bottom
+    ctx.fillStyle = colorStr;
+    ctx.font = 'bold 24px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.shadowColor = 'rgba(0,0,0,0.5)';
+    ctx.shadowBlur = 4;
+    ctx.shadowOffsetY = 2;
+    ctx.fillText(username.slice(0, 15), 128, 420);
+
+    // Create sprite from canvas
+    const texture = new THREE.CanvasTexture(canvas);
+    const material = new THREE.SpriteMaterial({ map: texture });
+    const sprite = new THREE.Sprite(material);
+    
+    // Scale sprite to be taller than wide (character-like proportions)
+    sprite.scale.set(0.6, 1.2, 1);
+    
+    return sprite;
   }
 
   createNameTag(name, color) {
