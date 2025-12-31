@@ -1058,29 +1058,56 @@ export class MinigameController {
     }
   }
 
-  // 3D player update
+  // 3D player update with smooth movement physics
   update3DPlayer(delta) {
-    const speed = 8 * delta;
-    const friction = 0.9;
-    const gravity = 20 * delta;
+    const maxSpeed = 12;
+    const acceleration = 40;
+    const friction = 0.85;
+    const gravity = 30;
+    const jumpForce = 15;
 
-    // Apply input
-    if (this.keys['KeyW'] || this.keys['ArrowUp']) this.playerState.vz = -speed;
-    else if (this.keys['KeyS'] || this.keys['ArrowDown']) this.playerState.vz = speed;
-    else this.playerState.vz *= friction;
-
-    if (this.keys['KeyA'] || this.keys['ArrowLeft']) this.playerState.vx = -speed;
-    else if (this.keys['KeyD'] || this.keys['ArrowRight']) this.playerState.vx = speed;
-    else this.playerState.vx *= friction;
+    // Handle continuous movement input with acceleration
+    let accelX = 0, accelZ = 0;
+    
+    if (this.keys['KeyW'] || this.keys['ArrowUp']) accelZ = -acceleration;
+    if (this.keys['KeyS'] || this.keys['ArrowDown']) accelZ = acceleration;
+    if (this.keys['KeyA'] || this.keys['ArrowLeft']) accelX = -acceleration;
+    if (this.keys['KeyD'] || this.keys['ArrowRight']) accelX = acceleration;
+    
+    // Apply acceleration
+    this.playerState.vx += accelX * delta;
+    this.playerState.vz += accelZ * delta;
+    
+    // Clamp max speed (allow diagonal movement up to maxSpeed)
+    const speed = Math.sqrt(this.playerState.vx ** 2 + this.playerState.vz ** 2);
+    if (speed > maxSpeed) {
+      const scale = maxSpeed / speed;
+      this.playerState.vx *= scale;
+      this.playerState.vz *= scale;
+    }
+    
+    // Apply friction when no input
+    if (accelX === 0) this.playerState.vx *= friction;
+    if (accelZ === 0) this.playerState.vz *= friction;
 
     // Apply velocity
-    this.playerState.x += this.playerState.vx;
-    this.playerState.z += this.playerState.vz;
+    this.playerState.x += this.playerState.vx * delta;
+    this.playerState.z += this.playerState.vz * delta;
 
-    // Apply gravity
+    // Apply gravity and jumping
     if (!this.playerState.onGround) {
-      this.playerState.vy -= gravity;
+      this.playerState.vy -= gravity * delta;
+    } else {
+      // Jump on Space
+      if (this.keys['Space'] && !this.playerState.jumpPressed) {
+        this.playerState.vy = jumpForce;
+        this.playerState.onGround = false;
+        this.playerState.jumpPressed = true;
+      }
     }
+    
+    if (!this.keys['Space']) this.playerState.jumpPressed = false;
+    
     this.playerState.y += this.playerState.vy * delta;
 
     // Ground collision
@@ -1090,24 +1117,32 @@ export class MinigameController {
       this.playerState.onGround = true;
     }
 
-    // Arena bounds (circular)
-    const dist = Math.sqrt(this.playerState.x * this.playerState.x + this.playerState.z * this.playerState.z);
+    // Arena bounds (circular, 18 unit radius)
+    const dist = Math.sqrt(this.playerState.x ** 2 + this.playerState.z ** 2);
     if (dist > 18) {
       const scale = 18 / dist;
       this.playerState.x *= scale;
       this.playerState.z *= scale;
+      // Bounce slightly
+      this.playerState.vx *= -0.3;
+      this.playerState.vz *= -0.3;
     }
 
-    // Update player mesh position
+    // Update player mesh position and rotation
     if (this.playerMesh) {
       this.playerMesh.position.x = this.playerState.x;
       this.playerMesh.position.y = this.playerState.y;
       this.playerMesh.position.z = this.playerState.z;
 
-      // Face movement direction
-      if (Math.abs(this.playerState.vx) > 0.01 || Math.abs(this.playerState.vz) > 0.01) {
-        const angle = Math.atan2(this.playerState.vx, this.playerState.vz);
-        this.playerMesh.rotation.y = angle;
+      // Face movement direction (smooth rotation)
+      if (Math.abs(this.playerState.vx) > 0.1 || Math.abs(this.playerState.vz) > 0.1) {
+        const targetAngle = Math.atan2(this.playerState.vx, this.playerState.vz);
+        // Interpolate rotation smoothly
+        const currentAngle = this.playerMesh.rotation.y;
+        let angleDiff = targetAngle - currentAngle;
+        if (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+        if (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+        this.playerMesh.rotation.y += angleDiff * 0.1;
       }
     }
 
@@ -1122,7 +1157,6 @@ export class MinigameController {
           coin.collected = true;
           this.playerState.score++;
           this.app.audio?.playSFX('coin');
-          // Remove coin mesh
           const coinMesh = this.scene?.getObjectByName(`coin_${coin.id}`);
           if (coinMesh) this.scene.remove(coinMesh);
         }
@@ -1247,546 +1281,498 @@ export class MinigameController {
     });
   }
 
-  // Default minigame (simple arena) - 2D
-  updateDefaultMinigame(delta) {
-    // Handle continuous key input
-    const speed = 200 * delta;
+  // Platform rendering helper for 3D
+  renderPlatforms3D() {
+    if (!this.platforms) return;
     
-    if (this.keys['KeyW'] || this.keys['ArrowUp']) this.playerState.y -= speed;
-    if (this.keys['KeyS'] || this.keys['ArrowDown']) this.playerState.y += speed;
-    if (this.keys['KeyA'] || this.keys['ArrowLeft']) this.playerState.x -= speed;
-    if (this.keys['KeyD'] || this.keys['ArrowRight']) this.playerState.x += speed;
-
-    // Clamp to canvas bounds
-    this.playerState.x = Math.max(20, Math.min(this.canvas.width - 20, this.playerState.x));
-    this.playerState.y = Math.max(20, Math.min(this.canvas.height - 20, this.playerState.y));
-  }
-
-  renderDefaultMinigame() {
-    // Draw arena border
-    this.ctx.strokeStyle = '#6c5ce7';
-    this.ctx.lineWidth = 4;
-    this.ctx.strokeRect(10, 10, this.canvas.width - 20, this.canvas.height - 20);
-
-    // Draw other players
-    if (this.gameState?.players) {
-      this.gameState.players.forEach(player => {
-        if (player.id === this.app.state.user?.id) return;
-        
-        this.ctx.fillStyle = '#00cec9';
-        this.ctx.beginPath();
-        this.ctx.arc(player.x || 100, player.y || 100, 20, 0, Math.PI * 2);
-        this.ctx.fill();
+    this.platforms.forEach(platform => {
+      const geo = new THREE.BoxGeometry(platform.width, 0.5, platform.depth);
+      const mat = new THREE.MeshStandardMaterial({
+        color: 0x6c5ce7,
+        roughness: 0.7
       });
-    }
-
-    // Draw local player
-    this.ctx.fillStyle = '#6c5ce7';
-    this.ctx.beginPath();
-    this.ctx.arc(this.playerState.x, this.playerState.y, 20, 0, Math.PI * 2);
-    this.ctx.fill();
-
-    // Draw score
-    this.ctx.fillStyle = '#ffffff';
-    this.ctx.font = 'bold 24px Nunito';
-    this.ctx.textAlign = 'left';
-    this.ctx.fillText(`Score: ${this.playerState.score}`, 20, 50);
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(platform.x, platform.y, platform.z);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      this.scene.add(mesh);
+    });
   }
 
-  // Button Bash minigame
+  // Balloons rendering helper for 3D
+  renderBalloons3D() {
+    if (!this.gameState?.balloons) return;
+    
+    this.gameState.balloons.forEach(balloon => {
+      if (balloon.popped) return;
+      
+      let balloonMesh = this.scene.getObjectByName(`balloon_${balloon.id}`);
+      if (!balloonMesh) {
+        const geo = new THREE.SphereGeometry(balloon.size, 16, 16);
+        const colors = [0xe74c3c, 0x3498db, 0x2ecc71, 0xf1c40f, 0x9b59b6];
+        const mat = new THREE.MeshStandardMaterial({ color: colors[balloon.id % colors.length] });
+        balloonMesh = new THREE.Mesh(geo, mat);
+        balloonMesh.name = `balloon_${balloon.id}`;
+        balloonMesh.castShadow = true;
+        this.scene.add(balloonMesh);
+      }
+      
+      balloonMesh.position.set(balloon.x, balloon.y, balloon.z);
+    });
+  }
+
+  // Goal rendering for 3D
+  renderGoal3D() {
+    if (!this.gameState?.goal) return;
+    
+    let goalMesh = this.scene.getObjectByName('goal');
+    if (!goalMesh) {
+      const geo = new THREE.CylinderGeometry(this.gameState.goal.size, this.gameState.goal.size, 0.5, 16);
+      const mat = new THREE.MeshBasicMaterial({ color: 0xfdcb6e });
+      goalMesh = new THREE.Mesh(geo, mat);
+      goalMesh.name = 'goal';
+      this.scene.add(goalMesh);
+    }
+    
+    goalMesh.position.set(this.gameState.goal.x, this.gameState.goal.y, this.gameState.goal.z);
+    goalMesh.rotation.y += 0.02;
+  }
+
+  // Button Bash minigame - rapid clicking
   updateButtonBash(delta) {
-    // Count tracked on server
-  }
-
-  renderButtonBash() {
-    const centerX = this.canvas.width / 2;
-    const centerY = this.canvas.height / 2;
-
-    // Draw button
-    const buttonSize = 100;
-    const isPressed = this.mouse.pressed || this.keys['Space'];
-    
-    this.ctx.fillStyle = isPressed ? '#5541d7' : '#6c5ce7';
-    this.ctx.beginPath();
-    this.ctx.arc(centerX, centerY, buttonSize, 0, Math.PI * 2);
-    this.ctx.fill();
-
-    // Button text
-    this.ctx.fillStyle = '#ffffff';
-    this.ctx.font = 'bold 24px Nunito';
-    this.ctx.textAlign = 'center';
-    this.ctx.textBaseline = 'middle';
-    this.ctx.fillText('MASH!', centerX, centerY);
-
-    // Draw player scores
-    if (this.gameState?.players) {
-      this.gameState.players.forEach((player, index) => {
-        const y = 80 + index * 50;
-        this.ctx.fillStyle = player.id === this.app.state.user?.id ? '#fdcb6e' : '#ffffff';
-        this.ctx.font = '20px Nunito';
-        this.ctx.textAlign = 'left';
-        this.ctx.fillText(`${player.username}: ${player.score || 0}`, 50, y);
-      });
+    // Track clicks per frame
+    if (!this.gameState.clicksThisFrame) {
+      this.gameState.clicksThisFrame = 0;
     }
   }
 
-  // Coin Chaos minigame
-  updateCoinChaos(delta) {
-    this.updateDefaultMinigame(delta);
+  // Hot Potato minigame - pass the bomb
+  updateHotPotato(delta) {
+    this.update3DPlayer(delta);
     
-    // Check coin collection (client-side prediction)
-    if (this.gameState?.coins) {
-      this.gameState.coins.forEach((coin, index) => {
-        const dx = this.playerState.x - coin.x;
-        const dy = this.playerState.y - coin.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
+    // Manage bomb timer
+    if (!this.gameState.bombTimer) {
+      this.gameState.bombTimer = 30 + Math.random() * 10;
+    }
+    
+    this.gameState.bombTimer -= delta;
+    
+    if (this.gameState.bombTimer <= 0) {
+      this.playerState.alive = false;
+      this.playerState.score = Math.max(0, this.playerState.score - 5);
+      this.gameState.bombTimer = 30;
+    }
+    
+    // Proximity detection to other players (in practice, check bots)
+    if (this.practiceBots && this.practiceBots.length > 0) {
+      this.practiceBots.forEach(bot => {
+        const dx = this.playerState.x - bot.x;
+        const dz = this.playerState.z - bot.z;
+        const dist = Math.sqrt(dx * dx + dz * dz);
         
-        if (dist < 30) {
-          // Coin collected - server will validate
-          this.app.audio.playSFX('coin');
+        if (dist < 2 && this.keys['Space']) {
+          // Pass bomb to bot
+          this.playerState.score += 1;
+          this.gameState.bombTimer = 30;
+          this.app.audio?.playSFX('pass');
         }
       });
     }
   }
 
-  renderCoinChaos() {
-    // Draw arena
-    this.ctx.strokeStyle = '#fdcb6e';
-    this.ctx.lineWidth = 4;
-    this.ctx.strokeRect(10, 10, this.canvas.width - 20, this.canvas.height - 20);
-
-    // Draw coins
-    if (this.gameState?.coins) {
-      this.gameState.coins.forEach(coin => {
-        this.ctx.fillStyle = '#fdcb6e';
-        this.ctx.beginPath();
-        this.ctx.arc(coin.x, coin.y, 15, 0, Math.PI * 2);
-        this.ctx.fill();
+  // Bumper Balls minigame - knock other players around
+  updateBumperBalls(delta) {
+    this.update3DPlayer(delta);
+    
+    // Check collisions with bots
+    if (this.practiceBots && this.practiceBots.length > 0) {
+      this.practiceBots.forEach(bot => {
+        const dx = this.playerState.x - bot.x;
+        const dz = this.playerState.z - bot.z;
+        const dist = Math.sqrt(dx * dx + dz * dz);
         
-        // Coin shine
-        this.ctx.fillStyle = '#fff3c4';
-        this.ctx.beginPath();
-        this.ctx.arc(coin.x - 5, coin.y - 5, 5, 0, Math.PI * 2);
-        this.ctx.fill();
-      });
-    }
-
-    // Draw players
-    if (this.gameState?.players) {
-      this.gameState.players.forEach(player => {
-        const isLocal = player.id === this.app.state.user?.id;
-        const x = isLocal ? this.playerState.x : player.x;
-        const y = isLocal ? this.playerState.y : player.y;
-        
-        this.ctx.fillStyle = isLocal ? '#6c5ce7' : '#00cec9';
-        this.ctx.beginPath();
-        this.ctx.arc(x, y, 20, 0, Math.PI * 2);
-        this.ctx.fill();
-      });
-    }
-
-    // Draw scores
-    this.ctx.fillStyle = '#ffffff';
-    this.ctx.font = 'bold 24px Nunito';
-    this.ctx.textAlign = 'left';
-    this.ctx.fillText(`Coins: ${this.playerState.score}`, 20, 50);
-  }
-
-  // Platform Peril minigame
-  updatePlatformPeril(delta) {
-    const speed = 200 * delta;
-    const gravity = 500 * delta;
-    
-    if (this.keys['KeyA'] || this.keys['ArrowLeft']) this.playerState.x -= speed;
-    if (this.keys['KeyD'] || this.keys['ArrowRight']) this.playerState.x += speed;
-    
-    // Simple gravity
-    this.playerState.vy = (this.playerState.vy || 0) + gravity;
-    this.playerState.y += this.playerState.vy * delta;
-    
-    // Ground collision (simplified)
-    if (this.playerState.y > this.canvas.height - 50) {
-      this.playerState.y = this.canvas.height - 50;
-      this.playerState.vy = 0;
-      this.playerState.grounded = true;
-    }
-    
-    // Jump
-    if ((this.keys['KeyW'] || this.keys['ArrowUp'] || this.keys['Space']) && this.playerState.grounded) {
-      this.playerState.vy = -300;
-      this.playerState.grounded = false;
-    }
-    
-    // Clamp X
-    this.playerState.x = Math.max(20, Math.min(this.canvas.width - 20, this.playerState.x));
-  }
-
-  renderPlatformPeril() {
-    // Draw platforms
-    if (this.gameState?.platforms) {
-      this.ctx.fillStyle = '#16213e';
-      this.gameState.platforms.forEach(plat => {
-        this.ctx.fillRect(plat.x, plat.y, plat.width, plat.height);
-      });
-    }
-
-    // Draw danger zone (rising lava)
-    const lavaHeight = this.gameState?.lavaHeight || 100;
-    this.ctx.fillStyle = '#e74c3c';
-    this.ctx.fillRect(0, this.canvas.height - lavaHeight, this.canvas.width, lavaHeight);
-
-    // Draw players
-    if (this.gameState?.players) {
-      this.gameState.players.forEach(player => {
-        if (!player.alive) return;
-        
-        const isLocal = player.id === this.app.state.user?.id;
-        const x = isLocal ? this.playerState.x : player.x;
-        const y = isLocal ? this.playerState.y : player.y;
-        
-        this.ctx.fillStyle = isLocal ? '#6c5ce7' : '#00cec9';
-        this.ctx.fillRect(x - 15, y - 30, 30, 30);
+        if (dist < 2) {
+          // Collision! Push bot away
+          const angle = Math.atan2(dz, dx);
+          bot.vx = Math.cos(angle) * 8;
+          bot.vz = Math.sin(angle) * 8;
+          
+          this.playerState.score++;
+          this.app.audio?.playSFX('bump');
+          
+          // Knockback on player too
+          this.playerState.vx -= Math.cos(angle) * 5;
+          this.playerState.vz -= Math.sin(angle) * 5;
+        }
       });
     }
   }
 
-  // Other minigame implementations (simplified versions)
+  // Maze Race minigame - reach the goal
+  updateMazeRace(delta) {
+    this.update3DPlayer(delta);
+    
+    // Create goal if not exists
+    if (!this.gameState.goal) {
+      this.gameState.goal = {
+        x: (Math.random() - 0.5) * 25,
+        z: (Math.random() - 0.5) * 25,
+        size: 2
+      };
+    }
+    
+    // Check if reached goal
+    const dx = this.playerState.x - this.gameState.goal.x;
+    const dz = this.playerState.z - this.gameState.goal.z;
+    const dist = Math.sqrt(dx * dx + dz * dz);
+    
+    if (dist < this.gameState.goal.size + 1) {
+      this.playerState.score += 10;
+      this.app.audio?.playSFX('win');
+      
+      // Spawn new goal
+      this.gameState.goal.x = (Math.random() - 0.5) * 25;
+      this.gameState.goal.z = (Math.random() - 0.5) * 25;
+    }
+  }
+
+  // Ice Skating minigame - slippery controls
+  updateIceSkating(delta) {
+    const acceleration = 25;
+    const friction = 0.92; // More slippery
+    const maxSpeed = 15;
+    
+    let accelX = 0, accelZ = 0;
+    if (this.keys['KeyA'] || this.keys['ArrowLeft']) accelX = -acceleration;
+    if (this.keys['KeyD'] || this.keys['ArrowRight']) accelX = acceleration;
+    if (this.keys['KeyW'] || this.keys['ArrowUp']) accelZ = -acceleration;
+    if (this.keys['KeyS'] || this.keys['ArrowDown']) accelZ = acceleration;
+    
+    this.playerState.vx += accelX * delta;
+    this.playerState.vz += accelZ * delta;
+    
+    // Clamp speed
+    const speed = Math.sqrt(this.playerState.vx ** 2 + this.playerState.vz ** 2);
+    if (speed > maxSpeed) {
+      const scale = maxSpeed / speed;
+      this.playerState.vx *= scale;
+      this.playerState.vz *= scale;
+    }
+    
+    // Apply heavy friction
+    this.playerState.vx *= friction;
+    this.playerState.vz *= friction;
+
+    // Update position
+    this.playerState.x += this.playerState.vx * delta;
+    this.playerState.z += this.playerState.vz * delta;
+
+    // Clamp to arena
+    const dist = Math.sqrt(this.playerState.x ** 2 + this.playerState.z ** 2);
+    if (dist > 20) {
+      const scale = 20 / dist;
+      this.playerState.x *= scale;
+      this.playerState.z *= scale;
+      // Bounce
+      this.playerState.vx *= -0.5;
+      this.playerState.vz *= -0.5;
+    }
+
+    // Collect items
+    if (!this.gameState.collectibles) {
+      this.gameState.collectibles = [];
+      for (let i = 0; i < 10; i++) {
+        this.gameState.collectibles.push({
+          id: i,
+          x: (Math.random() - 0.5) * 30,
+          z: (Math.random() - 0.5) * 30,
+          collected: false
+        });
+      }
+    }
+    
+    this.gameState.collectibles.forEach(item => {
+      if (item.collected) return;
+      const dx = this.playerState.x - item.x;
+      const dz = this.playerState.z - item.z;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+      if (dist < 1.5) {
+        item.collected = true;
+        this.playerState.score++;
+        this.app.audio?.playSFX('coin');
+      }
+    });
+
+    // Update mesh
+    if (this.playerMesh) {
+      this.playerMesh.position.set(this.playerState.x, 0, this.playerState.z);
+      if (Math.abs(this.playerState.vx) > 0.1 || Math.abs(this.playerState.vz) > 0.1) {
+        this.playerMesh.rotation.y = Math.atan2(this.playerState.vx, this.playerState.vz);
+      }
+    }
+  }
+
+  // Memory Match minigame - flip cards
   updateMemoryMatch(delta) {
-    // Card flip game - handled by mouse clicks
+    // Handled by mouse clicks - no continuous update needed
   }
 
-  renderMemoryMatch() {
-    const cards = this.gameState?.cards || [];
-    const cols = 4;
-    const rows = Math.ceil(cards.length / cols);
-    const cardWidth = 80;
-    const cardHeight = 100;
-    const gap = 20;
+  // Balloon Burst minigame - shoot balloons
+  updateBalloonBurst(delta) {
+    // Create balloons if not exists
+    if (!this.gameState.balloons) {
+      this.gameState.balloons = [];
+      for (let i = 0; i < 8; i++) {
+        this.gameState.balloons.push({
+          id: i,
+          x: (Math.random() - 0.5) * 30,
+          z: (Math.random() - 0.5) * 30,
+          y: 2 + Math.random() * 4,
+          vx: (Math.random() - 0.5) * 5,
+          vy: (Math.random() - 0.5) * 3,
+          vz: (Math.random() - 0.5) * 5,
+          size: 0.8 + Math.random() * 0.4,
+          popped: false
+        });
+      }
+    }
     
-    const startX = (this.canvas.width - (cols * (cardWidth + gap))) / 2;
-    const startY = (this.canvas.height - (rows * (cardHeight + gap))) / 2;
-
-    cards.forEach((card, index) => {
-      const col = index % cols;
-      const row = Math.floor(index / cols);
-      const x = startX + col * (cardWidth + gap);
-      const y = startY + row * (cardHeight + gap);
-
-      // Card back or front
-      if (card.revealed || card.matched) {
-        this.ctx.fillStyle = card.matched ? '#00b894' : '#6c5ce7';
-        this.ctx.fillRect(x, y, cardWidth, cardHeight);
-        
-        // Draw symbol
-        this.ctx.fillStyle = '#ffffff';
-        this.ctx.font = '48px Arial';
-        this.ctx.textAlign = 'center';
-        this.ctx.textBaseline = 'middle';
-        this.ctx.fillText(card.symbol || '?', x + cardWidth/2, y + cardHeight/2);
-      } else {
-        this.ctx.fillStyle = '#16213e';
-        this.ctx.fillRect(x, y, cardWidth, cardHeight);
-        this.ctx.strokeStyle = '#6c5ce7';
-        this.ctx.lineWidth = 2;
-        this.ctx.strokeRect(x, y, cardWidth, cardHeight);
+    // Update balloon positions
+    this.gameState.balloons.forEach(balloon => {
+      if (balloon.popped) return;
+      
+      balloon.x += balloon.vx * delta;
+      balloon.y += balloon.vy * delta;
+      balloon.z += balloon.vz * delta;
+      
+      // Gravity on balloons (slight)
+      balloon.vy -= 2 * delta;
+      
+      // Bounds
+      if (balloon.y < 0) {
+        balloon.popped = true;
+        this.playerState.score -= 1;
       }
     });
   }
 
-  updateBalloonBurst(delta) {
-    // Aim and shoot game
-  }
-
-  renderBalloonBurst() {
-    // Draw balloons
-    if (this.gameState?.balloons) {
-      this.gameState.balloons.forEach(balloon => {
-        if (balloon.popped) return;
-        
-        const colors = ['#e74c3c', '#3498db', '#2ecc71', '#f1c40f', '#9b59b6'];
-        this.ctx.fillStyle = colors[balloon.color % colors.length];
-        this.ctx.beginPath();
-        this.ctx.arc(balloon.x, balloon.y, balloon.size || 30, 0, Math.PI * 2);
-        this.ctx.fill();
-        
-        // Balloon string
-        this.ctx.strokeStyle = '#ffffff';
-        this.ctx.beginPath();
-        this.ctx.moveTo(balloon.x, balloon.y + (balloon.size || 30));
-        this.ctx.lineTo(balloon.x, balloon.y + (balloon.size || 30) + 20);
-        this.ctx.stroke();
-      });
-    }
-
-    // Draw crosshair
-    this.ctx.strokeStyle = '#ffffff';
-    this.ctx.lineWidth = 2;
-    this.ctx.beginPath();
-    this.ctx.moveTo(this.mouse.x - 15, this.mouse.y);
-    this.ctx.lineTo(this.mouse.x + 15, this.mouse.y);
-    this.ctx.moveTo(this.mouse.x, this.mouse.y - 15);
-    this.ctx.lineTo(this.mouse.x, this.mouse.y + 15);
-    this.ctx.stroke();
-
-    // Score
-    this.ctx.fillStyle = '#ffffff';
-    this.ctx.font = 'bold 24px Nunito';
-    this.ctx.textAlign = 'left';
-    this.ctx.fillText(`Popped: ${this.playerState.score}`, 20, 50);
-  }
-
-  updateHotPotato(delta) {
-    this.updateDefaultMinigame(delta);
-  }
-
-  renderHotPotato() {
-    // Draw arena
-    this.ctx.beginPath();
-    this.ctx.arc(this.canvas.width/2, this.canvas.height/2, 200, 0, Math.PI * 2);
-    this.ctx.strokeStyle = '#e74c3c';
-    this.ctx.lineWidth = 4;
-    this.ctx.stroke();
-
-    // Draw players
-    if (this.gameState?.players) {
-      this.gameState.players.forEach(player => {
-        const isLocal = player.id === this.app.state.user?.id;
-        const x = isLocal ? this.playerState.x : player.x;
-        const y = isLocal ? this.playerState.y : player.y;
-        const hasPotato = player.hasPotato;
-        
-        this.ctx.fillStyle = hasPotato ? '#e74c3c' : (isLocal ? '#6c5ce7' : '#00cec9');
-        this.ctx.beginPath();
-        this.ctx.arc(x, y, hasPotato ? 30 : 20, 0, Math.PI * 2);
-        this.ctx.fill();
-        
-        if (hasPotato) {
-          // Draw potato
-          this.ctx.fillStyle = '#f1c40f';
-          this.ctx.fillText('🥔', x - 10, y - 40);
-        }
-      });
-    }
-
-    // Timer
-    const timeLeft = this.gameState?.timer || 10;
-    this.ctx.fillStyle = timeLeft < 3 ? '#e74c3c' : '#ffffff';
-    this.ctx.font = 'bold 48px Nunito';
-    this.ctx.textAlign = 'center';
-    this.ctx.fillText(timeLeft.toFixed(1), this.canvas.width/2, 60);
-  }
-
-  updateMazeRace(delta) {
-    this.updateDefaultMinigame(delta);
-  }
-
-  renderMazeRace() {
-    // Draw maze walls
-    if (this.gameState?.walls) {
-      this.ctx.fillStyle = '#16213e';
-      this.gameState.walls.forEach(wall => {
-        this.ctx.fillRect(wall.x, wall.y, wall.width, wall.height);
-      });
-    }
-
-    // Draw goal
-    if (this.gameState?.goal) {
-      this.ctx.fillStyle = '#fdcb6e';
-      this.ctx.fillRect(this.gameState.goal.x, this.gameState.goal.y, 40, 40);
-      this.ctx.fillText('🏁', this.gameState.goal.x + 5, this.gameState.goal.y + 30);
-    }
-
-    // Draw players
-    if (this.gameState?.players) {
-      this.gameState.players.forEach(player => {
-        const isLocal = player.id === this.app.state.user?.id;
-        const x = isLocal ? this.playerState.x : player.x;
-        const y = isLocal ? this.playerState.y : player.y;
-        
-        this.ctx.fillStyle = isLocal ? '#6c5ce7' : '#00cec9';
-        this.ctx.beginPath();
-        this.ctx.arc(x, y, 15, 0, Math.PI * 2);
-        this.ctx.fill();
-      });
-    }
-  }
-
+  // Target Practice minigame - shoot targets
   updateTargetPractice(delta) {
-    // Aim and timing game
-  }
-
-  renderTargetPractice() {
-    // Draw targets
-    if (this.gameState?.targets) {
-      this.gameState.targets.forEach(target => {
-        if (target.hit) return;
-        
-        // Target rings
-        const rings = [target.size, target.size * 0.7, target.size * 0.4];
-        const colors = ['#e74c3c', '#ffffff', '#e74c3c'];
-        
-        rings.forEach((size, i) => {
-          this.ctx.fillStyle = colors[i];
-          this.ctx.beginPath();
-          this.ctx.arc(target.x, target.y, size, 0, Math.PI * 2);
-          this.ctx.fill();
+    // Create targets if not exists
+    if (!this.gameState.targets) {
+      this.gameState.targets = [];
+      for (let i = 0; i < 5; i++) {
+        this.gameState.targets.push({
+          id: i,
+          x: (Math.random() - 0.5) * 30,
+          z: (Math.random() - 0.5) * 30,
+          y: 5 + Math.random() * 5,
+          size: 1.5,
+          hit: false,
+          respawnTimer: 0
         });
-      });
+      }
     }
-
-    // Crosshair
-    this.ctx.strokeStyle = '#00cec9';
-    this.ctx.lineWidth = 2;
-    const size = 20;
-    this.ctx.beginPath();
-    this.ctx.moveTo(this.mouse.x - size, this.mouse.y);
-    this.ctx.lineTo(this.mouse.x + size, this.mouse.y);
-    this.ctx.moveTo(this.mouse.x, this.mouse.y - size);
-    this.ctx.lineTo(this.mouse.x, this.mouse.y + size);
-    this.ctx.arc(this.mouse.x, this.mouse.y, size * 0.8, 0, Math.PI * 2);
-    this.ctx.stroke();
-
-    // Score
-    this.ctx.fillStyle = '#ffffff';
-    this.ctx.font = 'bold 24px Nunito';
-    this.ctx.textAlign = 'left';
-    this.ctx.fillText(`Score: ${this.playerState.score}`, 20, 50);
+    
+    // Reset hit targets
+    this.gameState.targets.forEach(target => {
+      if (target.hit) {
+        target.respawnTimer -= delta;
+        if (target.respawnTimer <= 0) {
+          target.hit = false;
+          target.x = (Math.random() - 0.5) * 30;
+          target.z = (Math.random() - 0.5) * 30;
+        }
+      }
+    });
   }
 
+  // Rhythm Rumble minigame - hit notes
   updateRhythmRumble(delta) {
-    // Rhythm game - timed inputs
+    // Create note track if not exists
+    if (!this.gameState.notes) {
+      this.gameState.notes = [];
+      this.gameState.combo = 0;
+    }
+    
+    // Spawn notes periodically
+    if (!this.gameState.noteSpawnTimer) {
+      this.gameState.noteSpawnTimer = 0.5;
+    }
+    
+    this.gameState.noteSpawnTimer -= delta;
+    if (this.gameState.noteSpawnTimer <= 0) {
+      const track = Math.floor(Math.random() * 4);
+      this.gameState.notes.push({
+        id: Date.now(),
+        track,
+        y: 0,
+        vy: 150,
+        hit: false
+      });
+      this.gameState.noteSpawnTimer = 0.6 + Math.random() * 0.3;
+    }
+    
+    // Move notes down
+    this.gameState.notes.forEach(note => {
+      note.y += note.vy * delta;
+    });
+    
+    // Remove off-screen notes
+    this.gameState.notes = this.gameState.notes.filter(note => note.y < 600);
   }
 
-  renderRhythmRumble() {
-    const trackWidth = 100;
-    const numTracks = 4;
-    const startX = (this.canvas.width - numTracks * trackWidth) / 2;
-    const hitZoneY = this.canvas.height - 100;
+  // Coin Chaos minigame - 3D collectibles game
+  updateCoinChaos(delta) {
+    this.update3DPlayer(delta);
+    
+    // Coins already animated in animateCoins()
+    // Add bomb spawning every few seconds if they exist
+    if (!this.gameState.bombSpawnTimer) {
+      this.gameState.bombSpawnTimer = 3;
+    }
+    
+    this.gameState.bombSpawnTimer -= delta;
+    if (this.gameState.bombSpawnTimer <= 0) {
+      // Spawn a bomb (just for visual effect in practice mode)
+      if (this.isPractice && this.gameState.coins) {
+        // Add a special bomb coin
+        const bombCoin = {
+          id: 'bomb_' + Date.now(),
+          x: (Math.random() - 0.5) * 30,
+          y: 1,
+          z: (Math.random() - 0.5) * 30,
+          collected: false,
+          isBomb: true
+        };
+        this.gameState.coins.push(bombCoin);
+      }
+      this.gameState.bombSpawnTimer = 4 + Math.random() * 3;
+    }
+  }
 
-    // Draw tracks
-    for (let i = 0; i < numTracks; i++) {
-      const x = startX + i * trackWidth;
-      this.ctx.fillStyle = '#16213e';
-      this.ctx.fillRect(x, 0, trackWidth - 10, this.canvas.height);
+  // Platform Peril minigame - Jump across floating platforms
+  updatePlatformPeril(delta) {
+    const acceleration = 30;
+    const maxSpeed = 10;
+    const friction = 0.88;
+    const gravity = 35;
+    const jumpForce = 16;
+
+    // Horizontal movement with acceleration
+    let accelX = 0, accelZ = 0;
+    if (this.keys['KeyA'] || this.keys['ArrowLeft']) accelX = -acceleration;
+    if (this.keys['KeyD'] || this.keys['ArrowRight']) accelX = acceleration;
+    if (this.keys['KeyW'] || this.keys['ArrowUp']) accelZ = -acceleration;
+    if (this.keys['KeyS'] || this.keys['ArrowDown']) accelZ = acceleration;
+    
+    this.playerState.vx += accelX * delta;
+    this.playerState.vz += accelZ * delta;
+    
+    // Clamp speed
+    const hSpeed = Math.sqrt(this.playerState.vx ** 2 + this.playerState.vz ** 2);
+    if (hSpeed > maxSpeed) {
+      const scale = maxSpeed / hSpeed;
+      this.playerState.vx *= scale;
+      this.playerState.vz *= scale;
+    }
+    
+    if (accelX === 0) this.playerState.vx *= friction;
+    if (accelZ === 0) this.playerState.vz *= friction;
+
+    // Apply velocity
+    this.playerState.x += this.playerState.vx * delta;
+    this.playerState.z += this.playerState.vz * delta;
+
+    // Gravity
+    if (!this.playerState.onGround) {
+      this.playerState.vy -= gravity * delta;
+    } else {
+      if (this.keys['Space'] && !this.playerState.jumpPressed) {
+        this.playerState.vy = jumpForce;
+        this.playerState.onGround = false;
+        this.playerState.jumpPressed = true;
+      }
+    }
+    
+    if (!this.keys['Space']) this.playerState.jumpPressed = false;
+    
+    this.playerState.y += this.playerState.vy * delta;
+
+    // Platform collision
+    this.playerState.onGround = false;
+    
+    // Create platforms if not exists
+    if (!this.platforms) {
+      this.platforms = [];
+      const count = 7;
+      for (let i = 0; i < count; i++) {
+        this.platforms.push({
+          x: (Math.random() - 0.5) * 25,
+          z: (Math.random() - 0.5) * 25,
+          y: i === 0 ? 0 : 2 + Math.random() * 6,
+          width: 4 + Math.random() * 3,
+          depth: 4 + Math.random() * 3,
+          shrinking: false,
+          shrinkAmount: 0,
+          shirkingSpeed: 0.3 + Math.random() * 0.2
+        });
+      }
+    }
+    
+    // Check platform collisions
+    this.platforms.forEach(platform => {
+      const dx = Math.abs(this.playerState.x - platform.x);
+      const dz = Math.abs(this.playerState.z - platform.z);
+      const w = platform.width / 2;
+      const d = platform.depth / 2;
       
-      // Hit zone
-      this.ctx.fillStyle = '#6c5ce7';
-      this.ctx.fillRect(x, hitZoneY - 20, trackWidth - 10, 40);
-    }
-
-    // Draw notes
-    if (this.gameState?.notes) {
-      this.gameState.notes.forEach(note => {
-        const x = startX + note.track * trackWidth + (trackWidth - 10) / 2;
+      if (dx < w && dz < d && this.playerState.y >= platform.y && this.playerState.y <= platform.y + 1) {
+        this.playerState.y = platform.y + 1;
+        this.playerState.vy = 0;
+        this.playerState.onGround = true;
         
-        this.ctx.fillStyle = note.hit ? '#00b894' : '#fdcb6e';
-        this.ctx.beginPath();
-        this.ctx.arc(x - 5, note.y, 20, 0, Math.PI * 2);
-        this.ctx.fill();
-      });
-    }
-
-    // Key indicators
-    const keys = ['A', 'S', 'D', 'F'];
-    keys.forEach((key, i) => {
-      const x = startX + i * trackWidth + (trackWidth - 10) / 2;
-      this.ctx.fillStyle = '#ffffff';
-      this.ctx.font = 'bold 24px Nunito';
-      this.ctx.textAlign = 'center';
-      this.ctx.fillText(key, x - 5, hitZoneY);
+        // Start shrinking this platform
+        if (!platform.shrinking) {
+          platform.shrinking = true;
+          platform.shrinkTimer = 0.5;
+        }
+      }
     });
 
-    // Combo
-    this.ctx.fillStyle = '#fdcb6e';
-    this.ctx.font = 'bold 32px Nunito';
-    this.ctx.textAlign = 'center';
-    this.ctx.fillText(`${this.gameState?.combo || 0}x`, this.canvas.width / 2, 50);
-  }
+    // Shrink platforms over time
+    this.platforms.forEach(platform => {
+      if (platform.shrinking) {
+        platform.shrinkAmount += platform.shirkingSpeed * delta;
+        platform.width = Math.max(0.5, platform.width - platform.shirkingSpeed * delta);
+        platform.depth = Math.max(0.5, platform.depth - platform.shirkingSpeed * delta);
+      }
+    });
 
-  updateIceSkating(delta) {
-    // Slippery movement
-    const acceleration = 300 * delta;
-    const friction = 0.98;
-    
-    this.playerState.vx = this.playerState.vx || 0;
-    this.playerState.vy = this.playerState.vy || 0;
-    
-    if (this.keys['KeyA'] || this.keys['ArrowLeft']) this.playerState.vx -= acceleration;
-    if (this.keys['KeyD'] || this.keys['ArrowRight']) this.playerState.vx += acceleration;
-    if (this.keys['KeyW'] || this.keys['ArrowUp']) this.playerState.vy -= acceleration;
-    if (this.keys['KeyS'] || this.keys['ArrowDown']) this.playerState.vy += acceleration;
-    
-    // Apply friction
-    this.playerState.vx *= friction;
-    this.playerState.vy *= friction;
-    
-    // Update position
-    this.playerState.x += this.playerState.vx * delta;
-    this.playerState.y += this.playerState.vy * delta;
-    
-    // Clamp
-    this.playerState.x = Math.max(20, Math.min(this.canvas.width - 20, this.playerState.x));
-    this.playerState.y = Math.max(20, Math.min(this.canvas.height - 20, this.playerState.y));
-  }
-
-  renderIceSkating() {
-    // Ice rink
-    this.ctx.fillStyle = '#add8e6';
-    this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-    
-    // Ice pattern
-    this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
-    this.ctx.lineWidth = 1;
-    for (let i = 0; i < this.canvas.width; i += 50) {
-      this.ctx.beginPath();
-      this.ctx.moveTo(i, 0);
-      this.ctx.lineTo(i, this.canvas.height);
-      this.ctx.stroke();
+    // Fall off world
+    if (this.playerState.y < -5) {
+      this.playerState.alive = false;
+      this.playerState.score = Math.max(0, this.playerState.score - 1);
     }
 
-    // Collectibles
-    if (this.gameState?.collectibles) {
-      this.gameState.collectibles.forEach(item => {
-        this.ctx.fillStyle = '#fdcb6e';
-        this.ctx.beginPath();
-        this.ctx.arc(item.x, item.y, 15, 0, Math.PI * 2);
-        this.ctx.fill();
-      });
+    // Arena bounds
+    const dist = Math.sqrt(this.playerState.x ** 2 + this.playerState.z ** 2);
+    if (dist > 25) {
+      const scale = 25 / dist;
+      this.playerState.x *= scale;
+      this.playerState.z *= scale;
     }
 
-    // Players with trails
-    if (this.gameState?.players) {
-      this.gameState.players.forEach(player => {
-        const isLocal = player.id === this.app.state.user?.id;
-        const x = isLocal ? this.playerState.x : player.x;
-        const y = isLocal ? this.playerState.y : player.y;
-        
-        // Trail
-        this.ctx.strokeStyle = isLocal ? 'rgba(108, 92, 231, 0.3)' : 'rgba(0, 206, 201, 0.3)';
-        this.ctx.lineWidth = 3;
-        if (player.trail) {
-          this.ctx.beginPath();
-          player.trail.forEach((point, i) => {
-            if (i === 0) this.ctx.moveTo(point.x, point.y);
-            else this.ctx.lineTo(point.x, point.y);
-          });
-          this.ctx.stroke();
-        }
-        
-        // Player
-        this.ctx.fillStyle = isLocal ? '#6c5ce7' : '#00cec9';
-        this.ctx.beginPath();
-        this.ctx.arc(x, y, 20, 0, Math.PI * 2);
-        this.ctx.fill();
-      });
+    // Update mesh
+    if (this.playerMesh) {
+      this.playerMesh.position.set(this.playerState.x, this.playerState.y, this.playerState.z);
+      if (Math.abs(this.playerState.vx) > 0.1 || Math.abs(this.playerState.vz) > 0.1) {
+        this.playerMesh.rotation.y = Math.atan2(this.playerState.vx, this.playerState.vz);
+      }
     }
-
-    // Score
-    this.ctx.fillStyle = '#1a1a2e';
-    this.ctx.font = 'bold 24px Nunito';
-    this.ctx.textAlign = 'left';
-    this.ctx.fillText(`Score: ${this.playerState.score}`, 20, 40);
   }
+
+
 
   updateUI() {
     // Update timer
