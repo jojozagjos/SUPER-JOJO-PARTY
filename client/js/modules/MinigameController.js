@@ -298,11 +298,73 @@ export class MinigameController {
         }
 
         if (!glContext) {
-          console.error('Unable to obtain a WebGL context for the minigame canvas');
-          // Fallback: gracefully degrade to 2D canvas mode for this minigame
-          this.is3D = false;
-          this.app?.ui?.showToast('WebGL context could not be created for minigames on this device. Switching to 2D fallback.', 'warning');
-          return;
+          // Try to ensure canvas is in the DOM and visible, set explicit size, then retry
+          console.warn('Initial WebGL context acquisition failed. Attempting recovery steps...');
+
+          // Ensure canvas has pixel size attributes
+          try {
+            this.canvas.width = Math.max(1, this.canvas.clientWidth || 800);
+            this.canvas.height = Math.max(1, this.canvas.clientHeight || 600);
+          } catch (e) {
+            console.warn('Failed to set canvas size attributes:', e);
+          }
+
+          // If canvas is not attached, append it to body temporarily
+          let replaced = false;
+          if (!document.body.contains(this.canvas)) {
+            console.warn('Canvas was not attached to document.body - attaching temporarily for context creation');
+            document.body.appendChild(this.canvas);
+            replaced = true;
+          }
+
+          // Try creating a fresh canvas element (replace id) and swap into DOM
+          try {
+            const newCanvas = document.createElement('canvas');
+            newCanvas.id = this.canvas.id || `minigame-canvas-${Date.now()}`;
+            newCanvas.style.width = this.canvas.style.width || `${this.canvas.clientWidth}px`;
+            newCanvas.style.height = this.canvas.style.height || `${this.canvas.clientHeight}px`;
+            newCanvas.width = this.canvas.width;
+            newCanvas.height = this.canvas.height;
+            this.canvas.parentNode?.replaceChild(newCanvas, this.canvas);
+            this.canvas = newCanvas;
+            console.log('Replaced minigame canvas with a fresh element and retrying context acquisition');
+          } catch (swapErr) {
+            console.warn('Canvas replacement failed:', swapErr);
+          }
+
+          // Retry context attempts once more
+          for (const attempt of contextAttempts) {
+            try {
+              glContext = this.canvas.getContext(attempt.type, attempt.attrs);
+              if (glContext) {
+                console.log(`Acquired WebGL context after recovery using ${attempt.type} with`, attempt.attrs);
+                break;
+              }
+            } catch (e) {
+              console.warn(`Retry context attempt ${attempt.type} failed:`, e);
+              glContext = null;
+            }
+          }
+
+          if (!glContext) {
+            // All attempts failed — provide detailed diagnostic and stop initialization
+            const diag = {
+              canvasId: this.canvas.id,
+              clientWidth: this.canvas.clientWidth,
+              clientHeight: this.canvas.clientHeight,
+              styleDisplay: getComputedStyle(this.canvas).display,
+              styleVisibility: getComputedStyle(this.canvas).visibility,
+              attemptedTypes: contextAttempts.map(a => a.type)
+            };
+            console.error('Unable to obtain a WebGL context for the minigame canvas after retries. Diagnostics:', diag);
+            this.app?.ui?.showToast('Critical: Unable to initialize WebGL for minigames. See console diagnostics.', 'error');
+            // Throw to surface the error to global handlers (no 2D fallback)
+            throw new Error('Unable to obtain WebGL context for minigame canvas. See console for diagnostics.');
+          }
+
+          if (replaced) {
+            // If we appended canvas temporarily, leave it in place — it's now the active canvas
+          }
         }
 
         // Create renderer using the acquired context to avoid repeated context allocation failures
