@@ -111,16 +111,22 @@ function showWebGLBlocker() {
 document.addEventListener('DOMContentLoaded', () => {
   console.log('🎮 Super JoJo Party - Starting...');
   
-  // Check WebGL FIRST before anything else
-  console.log('🔍 Checking WebGL support...');
+  // Check WebGL but do not block the whole app — modules perform graceful fallbacks
+  console.log('🔍 Checking WebGL support (non-blocking)...');
   const webglOk = checkWebGL();
   // expose result for other modules to check before starting games
   window.hasWebGL = !!webglOk;
   if (!webglOk) {
-    showWebGLBlocker();
-    return; // Stop here - don't initialize the app
+    console.warn('⚠️ WebGL not fully available — continuing startup with 2D fallbacks where possible.');
+    // Show a non-blocking notice to the user (keep app usable)
+    const blocker = document.getElementById('webgl-blocker');
+    if (blocker) {
+      blocker.style.display = 'flex';
+      blocker.querySelector('.webgl-blocker-content')?.classList.add('non-blocking');
+    }
   }
-  
+
+  // Initialize the app regardless; individual modules will check `window.hasWebGL`
   window.app = new App();
   window.app.init();
 });
