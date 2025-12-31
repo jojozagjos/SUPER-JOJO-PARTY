@@ -9,8 +9,10 @@ export class SocketManager {
     this.socket = null;
     this.connected = false;
     this.reconnectAttempts = 0;
-    this.maxReconnectAttempts = 5;
+    this.maxReconnectAttempts = 10;
+    this.reconnectDelay = 2000;
     this.eventHandlers = new Map();
+    this.pendingEmits = [];
   }
 
   connect() {
@@ -22,7 +24,9 @@ export class SocketManager {
       auth: { token },
       reconnection: true,
       reconnectionAttempts: this.maxReconnectAttempts,
-      reconnectionDelay: 2000
+      reconnectionDelay: this.reconnectDelay,
+      reconnectionDelayMax: 10000,
+      randomizationFactor: 0.1
     });
 
     this.setupEventListeners();
@@ -33,6 +37,7 @@ export class SocketManager {
       this.socket.disconnect();
       this.socket = null;
       this.connected = false;
+      this.pendingEmits = [];
     }
   }
 
@@ -43,13 +48,17 @@ export class SocketManager {
       this.connected = true;
       this.reconnectAttempts = 0;
       this.app.ui.showToast('Connected to server', 'success');
+      
+      // Flush pending emits
+      this.flushPendingEmits();
     });
 
     this.socket.on('disconnect', (reason) => {
       console.log('🔌 Disconnected:', reason);
       this.connected = false;
       
-      if (reason !== 'io client disconnect') {
+      // Show reconnection message if not intentional
+      if (reason !== 'io client disconnect' && reason !== 'forced close') {
         this.app.ui.showToast('Connection lost. Reconnecting...', 'warning');
       }
     });
@@ -58,8 +67,32 @@ export class SocketManager {
       console.error('Connection error:', error);
       this.reconnectAttempts++;
       
+      // Show error only after several attempts
+      if (this.reconnectAttempts >= 5 && this.reconnectAttempts % 3 === 0) {
+        this.app.ui.showToast(
+          `Connection attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts}`,
+          'warning'
+        );
+      }
+      
+      // Final failure
       if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-        this.app.ui.showToast('Unable to connect to server', 'error');
+        this.app.ui.showToast(
+          'Unable to connect to server. Please refresh the page.',
+          'error'
+        );
+      }
+    });
+
+    this.socket.on('reconnect_attempt', () => {
+      console.log(`Reconnection attempt ${this.reconnectAttempts + 1}...`);
+    });
+
+    this.socket.on('error', (error) => {
+      console.error('Socket error:', error);
+      if (error === 'Server error' || error === 'Unauthorized') {
+        this.app.ui.showToast('Session expired. Please log in again.', 'error');
+        this.app.navigateTo('login');
       }
     });
 
@@ -388,6 +421,34 @@ export class SocketManager {
     // Error events
     this.socket.on('error', (data) => {
       console.error('Socket error:', data);
+    });
+  }
+
+  // Queue emits if not connected, flush when reconnected
+  emit(eventName, data, callback) {
+    if (this.socket && this.connected) {
+      return this.socket.emit(eventName, data, callback);
+    } else {
+      // Queue the emit for later
+      this.pendingEmits.push({ eventName, data, callback });
+      console.warn(`Queued emit: ${eventName} (not connected)`);
+      return null;
+    }
+  }
+
+  flushPendingEmits() {
+    while (this.pendingEmits.length > 0) {
+      const { eventName, data, callback } = this.pendingEmits.shift();
+      if (this.socket && this.connected) {
+        console.log(`Flushing queued emit: ${eventName}`);
+        this.socket.emit(eventName, data, callback);
+      }
+    }
+  }
+
+  isConnected() {
+    return this.connected && this.socket && this.socket.connected;
+  }
       this.app.ui.showToast(data.message || 'An error occurred', 'error');
     });
   }
