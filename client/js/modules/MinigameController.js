@@ -84,6 +84,10 @@ export class MinigameController {
       default: { primary: 0x6c5ce7, secondary: 0x2d3436, accent: 0xfd79a8 }
     };
 
+    // Texture cache for character portraits (loaded from /assets/characters/<id>/portrait.svg)
+    this.characterTextureCache = new Map();
+    this.textureLoader = typeof THREE !== 'undefined' ? new THREE.TextureLoader() : null;
+
     // Results overlay cache
     this.resultsUI = { initialized: false, container: null, list: null, continueBtn: null };
     this.resultsAutoHide = null;
@@ -93,7 +97,21 @@ export class MinigameController {
   }
 
   getCharacterStyle(characterId) {
-    return this.characterStyles[characterId] || this.characterStyles.default;
+    const base = this.characterStyles[characterId] || this.characterStyles.default;
+    return { ...base, id: characterId || 'default' };
+  }
+
+  getCharacterTexture(characterId) {
+    if (!this.textureLoader || typeof THREE === 'undefined') return null;
+    const key = characterId || 'default';
+    if (this.characterTextureCache.has(key)) return this.characterTextureCache.get(key);
+
+    const texture = this.textureLoader.load(`/assets/characters/${key}/portrait.svg`, undefined, undefined, () => {
+      console.warn(`Portrait for ${key} missing, using default.`);
+    });
+    texture.colorSpace = THREE.SRGBColorSpace || texture.colorSpace; // ensure sRGB when available
+    this.characterTextureCache.set(key, texture);
+    return texture;
   }
 
   loadKeybinds() {
@@ -134,76 +152,45 @@ export class MinigameController {
   }
 
   setupResultsUI() {
-    if (this.resultsUI.initialized) return;
+    // Do not bail out if nodes were missing during early construction; try again each call.
     const container = document.getElementById('minigame-results');
     const list = document.getElementById('results-list');
     const continueBtn = document.getElementById('results-continue-btn');
 
-    if (continueBtn) {
+    if (continueBtn && !continueBtn.dataset.bound) {
       continueBtn.addEventListener('click', () => this.onResultsContinue());
+      continueBtn.dataset.bound = 'true';
     }
 
-    this.resultsUI = { initialized: true, container, list, continueBtn };
+    if (container && list) {
+      this.resultsUI = { initialized: true, container, list, continueBtn };
+    }
   }
 
   buildCharacterModel(style) {
     const mesh = new THREE.Group();
 
-    const primaryMaterial = new THREE.MeshStandardMaterial({
-      color: style.primary,
-      metalness: 0.15,
-      roughness: 0.75
-    });
+    const texture = this.getCharacterTexture(style.id || 'default');
+    const cardMat = texture
+      ? new THREE.MeshBasicMaterial({ map: texture, transparent: true, side: THREE.DoubleSide })
+      : new THREE.MeshBasicMaterial({ color: style.primary, transparent: true, opacity: 0.95, side: THREE.DoubleSide });
 
-    // Prefer CapsuleGeometry when available, otherwise compose from primitives
-    if (typeof THREE.CapsuleGeometry === 'function') {
-      const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.55, 1.1, 10, 18), primaryMaterial);
-      body.position.y = 1.05;
-      body.castShadow = true;
-      mesh.add(body);
-    } else {
-      const cyl = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 1.1, 18), primaryMaterial);
-      cyl.position.y = 1.05;
-      cyl.castShadow = true;
-      mesh.add(cyl);
-      const top = new THREE.Mesh(new THREE.SphereGeometry(0.55, 14, 14), primaryMaterial);
-      top.position.y = 1.7;
-      top.castShadow = true;
-      mesh.add(top);
-      const bottom = new THREE.Mesh(new THREE.SphereGeometry(0.55, 14, 14), primaryMaterial);
-      bottom.position.y = 0.4;
-      bottom.castShadow = true;
-      mesh.add(bottom);
-    }
-
-    // Accent scarf
-    const scarf = new THREE.Mesh(
-      new THREE.TorusGeometry(0.6, 0.08, 8, 20),
-      new THREE.MeshStandardMaterial({ color: style.secondary, metalness: 0.1, roughness: 0.4 })
+    // Base puck
+    const base = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.75, 0.75, 0.35, 20),
+      new THREE.MeshStandardMaterial({ color: style.primary, metalness: 0.25, roughness: 0.5 })
     );
-    scarf.rotation.x = Math.PI / 2;
-    scarf.position.y = 1.1;
-    mesh.add(scarf);
+    base.position.y = 0.17;
+    base.castShadow = true;
+    base.receiveShadow = true;
+    mesh.add(base);
 
-    // Eyes
-    const eyeGeometry = new THREE.SphereGeometry(0.15, 14, 14);
-    const eyeMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
-    const pupilGeometry = new THREE.SphereGeometry(0.08, 12, 12);
-    const pupilMaterial = new THREE.MeshBasicMaterial({ color: style.accent });
-
-    const leftEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
-    leftEye.position.set(-0.2, 1.55, 0.45);
-    mesh.add(leftEye);
-    const leftPupil = new THREE.Mesh(pupilGeometry, pupilMaterial);
-    leftPupil.position.set(-0.2, 1.55, 0.53);
-    mesh.add(leftPupil);
-
-    const rightEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
-    rightEye.position.set(0.2, 1.55, 0.45);
-    mesh.add(rightEye);
-    const rightPupil = new THREE.Mesh(pupilGeometry, pupilMaterial);
-    rightPupil.position.set(0.2, 1.55, 0.53);
-    mesh.add(rightPupil);
+    // Billboarded portrait card
+    const card = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 1.6), cardMat);
+    card.position.y = 1.15;
+    card.userData.billboard = true;
+    card.renderOrder = 2;
+    mesh.add(card);
 
     return mesh;
   }
@@ -1718,6 +1705,7 @@ export class MinigameController {
 
   render3D() {
     this.updateCameraRig();
+    this.updateBillboards();
 
     // Animate coins
     this.animateCoins();
@@ -1727,6 +1715,26 @@ export class MinigameController {
 
     // Render 2D HUD on top using overlay
     this.renderHUD();
+  }
+
+  updateBillboards() {
+    if (!this.camera) return;
+    const targetY = this.camera.position.y;
+    const billboards = [];
+    if (this.playerMesh) billboards.push(...this.playerMesh.children.filter(c => c.userData?.billboard));
+    this.otherPlayerMeshes.forEach(mesh => {
+      mesh.children.forEach(child => { if (child.userData?.billboard) billboards.push(child); });
+    });
+
+    billboards.forEach(card => {
+      // Face the camera on Y axis only
+      const dx = this.camera.position.x - card.parent.position.x;
+      const dz = this.camera.position.z - card.parent.position.z;
+      card.rotation.y = Math.atan2(dx, dz);
+      // Keep upright
+      card.rotation.x = 0;
+      card.rotation.z = 0;
+    });
   }
 
   updateCameraRig() {
@@ -2877,7 +2885,7 @@ export class MinigameController {
         bot.ai = { targetX: bot.x, targetZ: bot.z, changeTimer: 1.5, difficulty: 'normal' };
       }
 
-      const speed = 6 * delta;
+      const speed = 8 * delta;
 
       // Decide goal per minigame
       if (minigameId === 'coin_chaos' && this.gameState?.coins) {
@@ -2934,10 +2942,10 @@ export class MinigameController {
         }
       } else {
         bot.ai.changeTimer -= delta;
-        if (bot.ai.changeTimer <= 0) {
-          bot.ai.targetX = (Math.random() - 0.5) * 30;
-          bot.ai.targetZ = (Math.random() - 0.5) * 30;
-          bot.ai.changeTimer = 2 + Math.random() * 3;
+        if (bot.ai.changeTimer <= 0 || Math.hypot(bot.ai.targetX - bot.x, bot.ai.targetZ - bot.z) < 0.5) {
+          bot.ai.targetX = (Math.random() - 0.5) * 26;
+          bot.ai.targetZ = (Math.random() - 0.5) * 26;
+          bot.ai.changeTimer = 1 + Math.random() * 1.5;
         }
       }
 

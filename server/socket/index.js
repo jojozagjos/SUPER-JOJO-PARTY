@@ -312,13 +312,25 @@ export function setupSocketHandlers(io, db, lobbyManager, gameManager) {
     socket.on('vote:readyToStart', (callback) => {
       try {
         const lobby = lobbyManager.getPlayerLobby(socket.user.userId);
-        if (!lobby || lobby.hostId !== socket.user.userId) {
+        if (!lobby) {
+          console.error('vote:readyToStart - No lobby found for user:', socket.user.userId);
+          return callback({ success: false, error: 'Not in a lobby' });
+        }
+        if (lobby.hostId !== socket.user.userId) {
+          console.error('vote:readyToStart - User is not host:', socket.user.userId, 'Host:', lobby.hostId);
           return callback({ success: false, error: 'Not authorized' });
         }
+        if (!lobby.selectedBoard) {
+          console.error('vote:readyToStart - No board selected for lobby:', lobby.id);
+          return callback({ success: false, error: 'No board selected' });
+        }
 
+        console.log('Starting game for lobby:', lobby.id, 'Board:', lobby.selectedBoard);
         const result = gameManager.startGame(lobby.id);
+        console.log('Game start result:', result);
         callback(result);
       } catch (error) {
+        console.error('vote:readyToStart error:', error);
         callback({ success: false, error: error.message });
       }
     });

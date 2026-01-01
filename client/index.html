@@ -444,8 +444,6 @@
         </div>
         
         <div class="sr-only" id="vote-announcer" aria-live="assertive" aria-atomic="true"></div>
-        
-        <button class="btn btn-primary btn-large hidden" id="start-actual-game-btn">Start Game!</button>
       </div>
     </div>
 
@@ -794,6 +792,35 @@
             <input type="range" id="camera-sensitivity" min="25" max="200" value="100">
             <span class="volume-value">100%</span>
           </div>
+          <div class="setting-item">
+            <label>Keybinds</label>
+            <div class="keybind-grid">
+              <div class="keybind-row" data-keybind-action="moveUp">
+                <span>Move Up</span>
+                <button class="btn btn-secondary btn-sm keybind-btn">Press a key</button>
+              </div>
+              <div class="keybind-row" data-keybind-action="moveDown">
+                <span>Move Down</span>
+                <button class="btn btn-secondary btn-sm keybind-btn">Press a key</button>
+              </div>
+              <div class="keybind-row" data-keybind-action="moveLeft">
+                <span>Move Left</span>
+                <button class="btn btn-secondary btn-sm keybind-btn">Press a key</button>
+              </div>
+              <div class="keybind-row" data-keybind-action="moveRight">
+                <span>Move Right</span>
+                <button class="btn btn-secondary btn-sm keybind-btn">Press a key</button>
+              </div>
+              <div class="keybind-row" data-keybind-action="action">
+                <span>Action</span>
+                <button class="btn btn-secondary btn-sm keybind-btn">Press a key</button>
+              </div>
+              <div class="keybind-row" data-keybind-action="jump">
+                <span>Jump</span>
+                <button class="btn btn-secondary btn-sm keybind-btn">Press a key</button>
+              </div>
+            </div>
+          </div>
         </div>
         
         <div class="settings-buttons">
@@ -862,10 +889,32 @@
         <!-- Controls Info Modal -->
         <div class="controls-info" id="controls-info" style="display: none;">
           <h3>🎮 Controls</h3>
-          <div class="control-row"><span>Movement</span><span>WASD / Arrow Keys</span></div>
-          <div class="control-row"><span>Action</span><span>Space / Enter</span></div>
-          <div class="control-row"><span>Camera</span><span>Mouse / Q/E</span></div>
-          <div class="control-row"><span>Pause</span><span>Escape</span></div>
+          <div class="keybind-grid">
+            <div class="keybind-row" data-keybind-action="moveUp">
+              <span>Move Up</span>
+              <button class="btn btn-secondary btn-sm keybind-btn">Press a key</button>
+            </div>
+            <div class="keybind-row" data-keybind-action="moveDown">
+              <span>Move Down</span>
+              <button class="btn btn-secondary btn-sm keybind-btn">Press a key</button>
+            </div>
+            <div class="keybind-row" data-keybind-action="moveLeft">
+              <span>Move Left</span>
+              <button class="btn btn-secondary btn-sm keybind-btn">Press a key</button>
+            </div>
+            <div class="keybind-row" data-keybind-action="moveRight">
+              <span>Move Right</span>
+              <button class="btn btn-secondary btn-sm keybind-btn">Press a key</button>
+            </div>
+            <div class="keybind-row" data-keybind-action="action">
+              <span>Action</span>
+              <button class="btn btn-secondary btn-sm keybind-btn">Press a key</button>
+            </div>
+            <div class="keybind-row" data-keybind-action="jump">
+              <span>Jump</span>
+              <button class="btn btn-secondary btn-sm keybind-btn">Press a key</button>
+            </div>
+          </div>
           <button class="btn btn-secondary btn-sm" id="close-controls-btn">Close</button>
         </div>
       </div>

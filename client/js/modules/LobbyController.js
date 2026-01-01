@@ -14,6 +14,7 @@ export class LobbyController {
     this.votingData = null;
     this.selectedVote = null;
     this.votingTimer = null;
+    this.tutorialVoteShown = false; // Track if tutorial vote was already shown
     
     this.setupEventListeners();
   }
@@ -1053,6 +1054,8 @@ export class LobbyController {
     this.boardPreviewScene = null;
     this.boardPreviewRenderer = null;
     this.boardPreviewAnimationId = null;
+    this.votingTotalVoters = (data.lobby?.players?.length || 0) + (data.lobby?.bots?.length || 0);
+    this.tutorialVoteShown = false; // Reset for new voting round
 
     // Clear any existing timer
     if (this.votingTimer) {
@@ -1285,6 +1288,9 @@ export class LobbyController {
 
     // Play sound
     this.app.audio.playSFX('click');
+
+    // Actually submit the vote to the server
+    this.castVote(voteId);
   }
 
   updateBoardPreview(boardId) {
@@ -1519,21 +1525,21 @@ export class LobbyController {
       this.votingTimer = null;
     }
 
-    let remaining = duration;
+    this.votingCountdownRemaining = duration;
     const timerEl = document.getElementById('vote-timer');
     const timerContainer = document.getElementById('voting-timer');
 
     const update = () => {
       if (timerEl) {
-        timerEl.textContent = remaining;
+        timerEl.textContent = this.votingCountdownRemaining;
       }
       
       // Add urgency class when time is low
       if (timerContainer) {
-        timerContainer.classList.toggle('urgent', remaining <= 10);
+        timerContainer.classList.toggle('urgent', this.votingCountdownRemaining <= 10);
       }
       
-      if (remaining <= 0) {
+      if (this.votingCountdownRemaining <= 0) {
         clearInterval(this.votingTimer);
         this.votingTimer = null;
         // Auto-submit vote if not already voted, or trigger timeout
@@ -1541,13 +1547,22 @@ export class LobbyController {
         return;
       }
       
-      remaining--;
+      this.votingCountdownRemaining--;
     };
 
     // Initial update
     update();
     // Start interval
     this.votingTimer = setInterval(update, 1000);
+  }
+
+  accelerateVotingTimer(toSeconds = 5) {
+    if (typeof this.votingCountdownRemaining !== 'number') return;
+    if (this.votingCountdownRemaining > toSeconds) {
+      this.votingCountdownRemaining = toSeconds;
+      const timerEl = document.getElementById('vote-timer');
+      if (timerEl) timerEl.textContent = this.votingCountdownRemaining;
+    }
   }
 
   onVotingTimeout() {
@@ -1598,6 +1613,12 @@ export class LobbyController {
           countEl.textContent = `${count} vote${count !== 1 ? 's' : ''}`;
         }
       });
+
+      // If everyone has voted, shorten the remaining timer to finish quickly
+      const totalVotes = Object.values(data.votes).reduce((a, b) => a + b, 0);
+      if (this.votingTotalVoters && totalVotes >= this.votingTotalVoters) {
+        this.accelerateVotingTimer(5);
+      }
     }
   }
 
@@ -1629,34 +1650,25 @@ export class LobbyController {
     this.app.ui.showToast(`${data.winnerName} selected!`, 'success');
     this.app.audio.playSFX('success');
 
-    // After a short delay, show "Enter Board" button for host
-    // New flow: Vote → Enter Board → Board Intro (cinematic showing board features) → Game
-    setTimeout(() => {
-      const startBtn = document.getElementById('start-actual-game-btn');
-      if (startBtn && this.isHost) {
-        startBtn.textContent = `Enter ${data.winnerName} →`;
-        startBtn.classList.remove('hidden');
-        startBtn.onclick = () => {
-          this.enterBoard(data.winner, data.winnerName);
-        };
-      } else if (startBtn) {
-        // Non-host players see waiting message
-        startBtn.textContent = 'Waiting for host...';
-        startBtn.classList.remove('hidden');
-        startBtn.classList.add('btn-disabled');
-        startBtn.disabled = true;
-      }
-    }, 1500);
+    // Auto-enter board after a short delay for host
+    if (this.isHost) {
+      setTimeout(() => {
+        this.enterBoard(data.winner, data.winnerName);
+      }, 1500);
+    }
   }
 
   enterBoard(boardId, boardName) {
+    console.log('Entering board:', boardId, boardName);
     // Tell server we're ready to start the game
     this.app.ui.showLoading(`Entering ${boardName}...`);
     
     this.app.socket.socket.emit('vote:readyToStart', (response) => {
+      console.log('vote:readyToStart response:', response);
       this.app.ui.hideLoading();
       if (!response.success) {
         this.app.ui.showToast(response.error || 'Failed to enter board', 'error');
+        console.error('Failed to start game:', response);
       }
       // Server will emit game:started which will navigate to game screen
       // The game screen will then show the board intro
@@ -1665,6 +1677,14 @@ export class LobbyController {
   }
 
   showTutorialVote(selectedBoard) {
+    // Prevent duplicate tutorial vote overlays
+    if (this.tutorialVoteShown || this.tutorialVoteOverlay) {
+      console.log('Tutorial vote already shown, skipping duplicate');
+      return;
+    }
+    
+    this.tutorialVoteShown = true;
+
     // Create tutorial vote overlay
     const overlay = document.createElement('div');
     overlay.id = 'tutorial-vote-overlay';
@@ -1775,17 +1795,6 @@ export class LobbyController {
       // The game will handle showing the tutorial
     } else {
       this.app.ui.showToast('Skipping tutorial - Let\'s play! 🎮', 'info');
-    }
-    
-    // If host, show the start game button
-    if (this.isHost) {
-      setTimeout(() => {
-        const startBtn = document.getElementById('start-actual-game-btn');
-        if (startBtn) {
-          startBtn.classList.remove('hidden');
-          startBtn.textContent = data.showTutorial ? 'Start with Tutorial' : 'Start Game';
-        }
-      }, 1000);
     }
   }
 

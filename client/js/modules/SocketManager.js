@@ -250,10 +250,10 @@ export class SocketManager {
         winnerName: data.board.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
       });
       
-      // Show tutorial vote screen
+      // Show tutorial vote screen after a longer delay to let users see the board result
       setTimeout(() => {
         this.app.lobby.showTutorialVote(data.board);
-      }, 2000);
+      }, 3000);
     });
 
     // Tutorial vote events

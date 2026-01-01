@@ -154,6 +154,7 @@ export class UIManager {
       if (controlsInfo && menuTab) {
         controlsInfo.style.display = 'block';
         menuTab.style.display = 'none';
+        this.refreshKeybindUI();
       }
     });
 
@@ -186,6 +187,9 @@ export class UIManager {
 
     // Setup pause settings controls
     this.setupPauseSettingsControls();
+
+    // Setup keybind rebinding UI
+    this.setupKeybindControls();
 
     // Settings controls
     this.setupSettingsControls();
@@ -358,6 +362,77 @@ export class UIManager {
     }
   }
 
+  setupKeybindControls() {
+    const rows = document.querySelectorAll('.keybind-row');
+    rows.forEach(row => {
+      const action = row.dataset.keybindAction;
+      const btn = row.querySelector('.keybind-btn');
+      if (!btn) return;
+      btn.addEventListener('click', () => this.beginKeybindRebind(action, btn));
+    });
+    this.refreshKeybindUI();
+  }
+
+  refreshKeybindUI() {
+    const bindings = this.app.minigame?.keybinds || {};
+    document.querySelectorAll('.keybind-row').forEach(row => {
+      const action = row.dataset.keybindAction;
+      const btn = row.querySelector('.keybind-btn');
+      if (!btn) return;
+      const code = bindings[action]?.[0];
+      btn.textContent = code ? this.formatKeyLabel(code) : 'Unbound';
+    });
+  }
+
+  formatKeyLabel(code) {
+    if (!code) return 'Unbound';
+    const map = {
+      Space: 'Space',
+      ShiftLeft: 'Left Shift',
+      ShiftRight: 'Right Shift',
+      ControlLeft: 'Left Ctrl',
+      ControlRight: 'Right Ctrl',
+      AltLeft: 'Left Alt',
+      AltRight: 'Right Alt'
+    };
+    if (code.startsWith('Key')) return code.replace('Key', '');
+    if (code.startsWith('Digit')) return code.replace('Digit', '');
+    return map[code] || code;
+  }
+
+  beginKeybindRebind(action, button) {
+    if (!this.app.minigame) {
+      this.showToast('Minigame not ready yet', 'warning');
+      return;
+    }
+
+    if (this._keybindCapture) {
+      document.removeEventListener('keydown', this._keybindCapture, true);
+      this._keybindCapture = null;
+    }
+
+    const originalText = button.textContent;
+    button.textContent = 'Press any key...';
+
+    this._keybindCapture = (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const code = ev.code;
+      // Escape cancels rebinding
+      if (code === 'Escape') {
+        button.textContent = originalText;
+      } else {
+        this.app.minigame.rebindAction(action, [code]);
+        button.textContent = this.formatKeyLabel(code);
+        this.showToast(`Bound ${action} to ${this.formatKeyLabel(code)}`, 'success');
+      }
+      document.removeEventListener('keydown', this._keybindCapture, true);
+      this._keybindCapture = null;
+    };
+
+    document.addEventListener('keydown', this._keybindCapture, true);
+  }
+
   refreshSettingsUI() {
     // Update all settings controls to reflect current values
     const settings = this.app.state.settings;
@@ -418,6 +493,9 @@ export class UIManager {
     if (targetScreen) {
       targetScreen.classList.add('active');
       this.currentScreen = screenId;
+      if (screenId === 'settings') {
+        this.refreshKeybindUI();
+      }
     }
   }
 

@@ -359,6 +359,11 @@ export class LobbyManager {
 
     lobby.state = LOBBY_STATE.VOTING;
     lobby.votes = { board: {}, tutorial: {} };
+    lobby.boardVoteFinalized = false;
+    if (lobby.votingTimeout) {
+      clearTimeout(lobby.votingTimeout);
+      lobby.votingTimeout = null;
+    }
 
     // Build voting options from BOARDS, excluding any disabled boards in settings
     const disabled = new Set(lobby.settings.disabledMinigames || []);
@@ -378,15 +383,25 @@ export class LobbyManager {
       icon: b.preview || null
     }));
 
+    // Keep the current voting options so we can resolve fallback winners if no one votes
+    lobby.currentVotingOptions = options.map(o => o.id);
+
+    const duration = 30;
+
     const votingPayload = {
       title: 'Vote!',
       subtitle: 'Select a board',
       options,
-      duration: 30,
+      duration,
       lobby: this.sanitizeLobby(lobby)
     };
 
     this.io.to(lobbyId).emit('lobby:votingStarted', votingPayload);
+
+    // Fallback: if not everyone votes, tally automatically when the timer expires
+    lobby.votingTimeout = setTimeout(() => {
+      this.tallyBoardVotes(lobby);
+    }, duration * 1000);
 
     return { success: true };
   }
@@ -394,6 +409,7 @@ export class LobbyManager {
   submitBoardVote(lobbyId, playerId, boardId) {
     const lobby = this.lobbies.get(lobbyId);
     if (!lobby || lobby.state !== LOBBY_STATE.VOTING) return { success: false };
+    if (lobby.boardVoteFinalized) return { success: true };
 
     lobby.votes.board[playerId] = boardId;
 
@@ -413,6 +429,10 @@ export class LobbyManager {
     // Check if all votes are in
     const totalVoters = lobby.players.length + lobby.bots.length;
     if (Object.keys(lobby.votes.board).length >= totalVoters) {
+      if (lobby.votingTimeout) {
+        clearTimeout(lobby.votingTimeout);
+        lobby.votingTimeout = null;
+      }
       this.tallyBoardVotes(lobby);
     }
 
@@ -420,9 +440,26 @@ export class LobbyManager {
   }
 
   tallyBoardVotes(lobby) {
+    if (!lobby || lobby.state !== LOBBY_STATE.VOTING) return;
+    if (lobby.boardVoteFinalized) return;
+    lobby.boardVoteFinalized = true;
+
+    if (lobby.votingTimeout) {
+      clearTimeout(lobby.votingTimeout);
+      lobby.votingTimeout = null;
+    }
+
     const voteCounts = {};
     for (const boardId of Object.values(lobby.votes.board)) {
       voteCounts[boardId] = (voteCounts[boardId] || 0) + 1;
+    }
+
+    // If nobody voted (possible if everyone timed out), pick a random option
+    if (Object.keys(voteCounts).length === 0) {
+      const fallback = lobby.currentVotingOptions?.length
+        ? lobby.currentVotingOptions[Math.floor(Math.random() * lobby.currentVotingOptions.length)]
+        : 'tropical_paradise';
+      voteCounts[fallback] = 1;
     }
 
     // Find winner(s)

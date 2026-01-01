@@ -98,10 +98,20 @@ export class GameManager {
 
   startGame(lobbyId) {
     const lobby = this.lobbyManager.getLobby(lobbyId);
-    if (!lobby || !lobby.selectedBoard) return { success: false };
+    if (!lobby) {
+      console.error('startGame - Lobby not found:', lobbyId);
+      return { success: false, error: 'Lobby not found' };
+    }
+    if (!lobby.selectedBoard) {
+      console.error('startGame - No board selected for lobby:', lobbyId);
+      return { success: false, error: 'No board selected' };
+    }
 
     const board = BOARDS.find(b => b.id === lobby.selectedBoard);
-    if (!board) return { success: false };
+    if (!board) {
+      console.error('startGame - Board not found:', lobby.selectedBoard);
+      return { success: false, error: 'Board not found' };
+    }
 
     lobby.state = LOBBY_STATE.PLAYING;
 
@@ -1872,7 +1882,8 @@ export class GameManager {
     return {
       id: game.id,
       lobbyId: game.lobbyId,
-      board: game.board,
+      boardId: game.board,
+      boardData: game.boardData,
       players: game.players.map(p => ({
         id: p.id,
         username: p.username,

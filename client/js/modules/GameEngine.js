@@ -49,8 +49,9 @@ export class GameEngine {
   initGame(data) {
     this.gameState = data.gameState || data.game;
     this.players = data.players || this.gameState?.players;
-    this.boardData = data.board || this.gameState?.board;
-    this.boardTheme = this.getBoardTheme(this.gameState?.boardId || this.boardData?.id);
+    this.boardData = data.boardData || this.gameState?.boardData;
+    const boardId = data.boardId || this.gameState?.boardId || this.boardData?.id;
+    this.boardTheme = this.getBoardTheme(boardId);
     this.showedBoardIntro = false;
     
     this.initThreeJS();
@@ -65,7 +66,7 @@ export class GameEngine {
   }
 
   showBoardIntro() {
-    const boardId = this.gameState?.boardId || this.boardData?.id;
+    const boardId = this.gameState?.boardId || this.boardData?.id || 'default';
     const boardName = this.getBoardDisplayName(boardId);
     
     // Create board intro overlay
