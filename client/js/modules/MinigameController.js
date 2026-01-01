@@ -41,6 +41,16 @@ export class MinigameController {
     this.keys = {};
     this.mouse = { x: 0, y: 0, pressed: false };
     this.touches = [];
+    this.keybinds = this.loadKeybinds();
+    this.activeActions = {
+      moveUp: false,
+      moveDown: false,
+      moveLeft: false,
+      moveRight: false,
+      action: false,
+      jump: false
+    };
+    this.gamepad = { deadzone: 0.2, lastButtons: {}, lastAction: false };
     
     // Player state (for local player)
     this.playerState = {
@@ -60,8 +70,142 @@ export class MinigameController {
     
     // Practice bots
     this.practiceBots = [];
+
+    // Arena bounds
+    this.arenaRadius = 18;
+
+    // Camera rig (shared/stationary camera per minigame)
+    this.cameraRig = null;
+
+    // Character style lookup so players/bots render with their selected avatars
+    this.characterStyles = {
+      jojo: { primary: 0xffc857, secondary: 0x2e294e, accent: 0xff6b6b },
+      mimi: { primary: 0x7dd3fc, secondary: 0x1f2937, accent: 0xfbbf24 },
+      default: { primary: 0x6c5ce7, secondary: 0x2d3436, accent: 0xfd79a8 }
+    };
+
+    // Results overlay cache
+    this.resultsUI = { initialized: false, container: null, list: null, continueBtn: null };
+    this.resultsAutoHide = null;
     
     this.setupInputHandlers();
+    this.setupResultsUI();
+  }
+
+  getCharacterStyle(characterId) {
+    return this.characterStyles[characterId] || this.characterStyles.default;
+  }
+
+  loadKeybinds() {
+    try {
+      const stored = localStorage.getItem('minigameKeybinds');
+      if (stored) return JSON.parse(stored);
+    } catch (e) {}
+
+    // Defaults
+    return {
+      moveUp: ['KeyW', 'ArrowUp'],
+      moveDown: ['KeyS', 'ArrowDown'],
+      moveLeft: ['KeyA', 'ArrowLeft'],
+      moveRight: ['KeyD', 'ArrowRight'],
+      action: ['Space'],
+      jump: ['Space']
+    };
+  }
+
+  saveKeybinds(bindings) {
+    try {
+      localStorage.setItem('minigameKeybinds', JSON.stringify(bindings));
+      this.keybinds = bindings;
+    } catch (e) {}
+  }
+
+  rebindAction(action, keys) {
+    const next = { ...this.keybinds, [action]: keys };
+    this.saveKeybinds(next);
+  }
+
+  keyToActions(code) {
+    const matches = [];
+    Object.entries(this.keybinds || {}).forEach(([action, codes]) => {
+      if (codes?.includes(code)) matches.push(action);
+    });
+    return matches;
+  }
+
+  setupResultsUI() {
+    if (this.resultsUI.initialized) return;
+    const container = document.getElementById('minigame-results');
+    const list = document.getElementById('results-list');
+    const continueBtn = document.getElementById('results-continue-btn');
+
+    if (continueBtn) {
+      continueBtn.addEventListener('click', () => this.onResultsContinue());
+    }
+
+    this.resultsUI = { initialized: true, container, list, continueBtn };
+  }
+
+  buildCharacterModel(style) {
+    const mesh = new THREE.Group();
+
+    const primaryMaterial = new THREE.MeshStandardMaterial({
+      color: style.primary,
+      metalness: 0.15,
+      roughness: 0.75
+    });
+
+    // Prefer CapsuleGeometry when available, otherwise compose from primitives
+    if (typeof THREE.CapsuleGeometry === 'function') {
+      const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.55, 1.1, 10, 18), primaryMaterial);
+      body.position.y = 1.05;
+      body.castShadow = true;
+      mesh.add(body);
+    } else {
+      const cyl = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 1.1, 18), primaryMaterial);
+      cyl.position.y = 1.05;
+      cyl.castShadow = true;
+      mesh.add(cyl);
+      const top = new THREE.Mesh(new THREE.SphereGeometry(0.55, 14, 14), primaryMaterial);
+      top.position.y = 1.7;
+      top.castShadow = true;
+      mesh.add(top);
+      const bottom = new THREE.Mesh(new THREE.SphereGeometry(0.55, 14, 14), primaryMaterial);
+      bottom.position.y = 0.4;
+      bottom.castShadow = true;
+      mesh.add(bottom);
+    }
+
+    // Accent scarf
+    const scarf = new THREE.Mesh(
+      new THREE.TorusGeometry(0.6, 0.08, 8, 20),
+      new THREE.MeshStandardMaterial({ color: style.secondary, metalness: 0.1, roughness: 0.4 })
+    );
+    scarf.rotation.x = Math.PI / 2;
+    scarf.position.y = 1.1;
+    mesh.add(scarf);
+
+    // Eyes
+    const eyeGeometry = new THREE.SphereGeometry(0.15, 14, 14);
+    const eyeMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    const pupilGeometry = new THREE.SphereGeometry(0.08, 12, 12);
+    const pupilMaterial = new THREE.MeshBasicMaterial({ color: style.accent });
+
+    const leftEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
+    leftEye.position.set(-0.2, 1.55, 0.45);
+    mesh.add(leftEye);
+    const leftPupil = new THREE.Mesh(pupilGeometry, pupilMaterial);
+    leftPupil.position.set(-0.2, 1.55, 0.53);
+    mesh.add(leftPupil);
+
+    const rightEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
+    rightEye.position.set(0.2, 1.55, 0.45);
+    mesh.add(rightEye);
+    const rightPupil = new THREE.Mesh(pupilGeometry, pupilMaterial);
+    rightPupil.position.set(0.2, 1.55, 0.53);
+    mesh.add(rightPupil);
+
+    return mesh;
   }
 
   setupInputHandlers() {
@@ -114,16 +258,22 @@ export class MinigameController {
 
   handleKeyInput(code, pressed) {
     if (!this.isPlaying && !this.isTutorial) return;
-    
+
+    // Map key to actions
+    const actions = this.keyToActions(code);
+    actions.forEach(action => {
+      this.activeActions[action] = pressed;
+    });
+
     // In practice/tutorial mode, don't send to server
     if (!this.isPractice && !this.isTutorial && this.app.socket?.isConnected()) {
       const input = { key: code, pressed };
       this.app.socket.emit('minigame:input', input);
     }
-    
-    // Handle local input for responsive feel
+
+    // Handle local input for responsive feel (2D only)
     this.processLocalInput(code, pressed);
-    
+
     // Tutorial progression
     if (this.isTutorial && pressed) {
       this.checkTutorialProgress(code);
@@ -174,17 +324,21 @@ export class MinigameController {
 
   processLocalInput(code, pressed) {
     if (!pressed) return;
+    if (this.is3D) {
+      // 3D movement is handled per-frame via activeActions
+      return;
+    }
     
-    const speed = this.is3D ? 0.5 : 5;
+    const speed = 5;
     const inputMappings = {
-      'KeyW': () => { this.playerState.y -= speed; if (this.is3D) this.playerState.vz = -speed; },
-      'KeyS': () => { this.playerState.y += speed; if (this.is3D) this.playerState.vz = speed; },
-      'KeyA': () => { this.playerState.x -= speed; if (this.is3D) this.playerState.vx = -speed; },
-      'KeyD': () => { this.playerState.x += speed; if (this.is3D) this.playerState.vx = speed; },
-      'ArrowUp': () => { this.playerState.y -= speed; if (this.is3D) this.playerState.vz = -speed; },
-      'ArrowDown': () => { this.playerState.y += speed; if (this.is3D) this.playerState.vz = speed; },
-      'ArrowLeft': () => { this.playerState.x -= speed; if (this.is3D) this.playerState.vx = -speed; },
-      'ArrowRight': () => { this.playerState.x += speed; if (this.is3D) this.playerState.vx = speed; },
+      'KeyW': () => { this.playerState.y -= speed; },
+      'KeyS': () => { this.playerState.y += speed; },
+      'KeyA': () => { this.playerState.x -= speed; },
+      'KeyD': () => { this.playerState.x += speed; },
+      'ArrowUp': () => { this.playerState.y -= speed; },
+      'ArrowDown': () => { this.playerState.y += speed; },
+      'ArrowLeft': () => { this.playerState.x -= speed; },
+      'ArrowRight': () => { this.playerState.x += speed; },
       'Space': () => this.handleAction()
     };
 
@@ -208,7 +362,7 @@ export class MinigameController {
     
     // Local action handling for 3D games
     if (this.is3D && this.playerState.onGround) {
-      this.playerState.vy = 8; // Jump
+      this.playerState.vy = 10; // Jump
       this.playerState.onGround = false;
     }
   }
@@ -399,6 +553,17 @@ export class MinigameController {
         } catch (e) {
           console.warn('Shadow map not supported or failed to set:', e);
         }
+
+        // Handle context loss gracefully to avoid loud warnings
+        this.canvas.addEventListener('webglcontextlost', (event) => {
+          event.preventDefault();
+          this.app?.ui?.showToast('Graphics context lost — attempting recovery...', 'warning');
+        }, { passive: false });
+
+        this.canvas.addEventListener('webglcontextrestored', () => {
+          this.app?.ui?.showToast('Graphics context restored', 'success');
+          this.renderer?.resetState?.();
+        });
     } catch (error) {
       console.error('Failed to create WebGL context:', error);
       this.scene = null;
@@ -453,203 +618,546 @@ export class MinigameController {
 
   createMinigameArena() {
     const minigameId = this.currentMinigame?.id;
-    
-    // Base platform
-    const platformGeometry = new THREE.CylinderGeometry(20, 22, 2, 32);
+
+    const themes = {
+      coin_chaos: {
+        background: 0x0b132b,
+        fogColor: 0x0b132b,
+        fog: [40, 160],
+        ground: 0x14f1d9,
+        accent: 0xffc857,
+        radius: 20,
+        cameraRig: {
+          position: new THREE.Vector3(0, 32, 46),
+          target: new THREE.Vector3(0, 6, 0),
+          fov: 55,
+          smoothing: 0.06
+        }
+      },
+      platform_peril: {
+        background: 0x0f0c29,
+        fogColor: 0x302b63,
+        fog: [30, 120],
+        ground: 0x6c5ce7,
+        accent: 0x00f5d4,
+        radius: 22,
+        cameraRig: {
+          position: new THREE.Vector3(-6, 26, 32),
+          target: new THREE.Vector3(0, 4, 0),
+          fov: 60,
+          smoothing: 0.08
+        }
+      },
+      bumper_balls: {
+        background: 0x1b1b1b,
+        fogColor: 0x1f2937,
+        fog: [25, 90],
+        ground: 0xe74c3c,
+        accent: 0xfad390,
+        radius: 19,
+        cameraRig: {
+          position: new THREE.Vector3(0, 24, 34),
+          target: new THREE.Vector3(0, 3, 0),
+          fov: 58,
+          smoothing: 0.07
+        }
+      },
+      hot_potato: {
+        background: 0x1b0b0b,
+        fogColor: 0x3c1515,
+        fog: [25, 80],
+        ground: 0xf25f5c,
+        accent: 0xffd166,
+        radius: 20,
+        cameraRig: {
+          position: new THREE.Vector3(6, 28, 38),
+          target: new THREE.Vector3(0, 5, 0),
+          fov: 60,
+          smoothing: 0.07
+        }
+      },
+      ice_skating: {
+        background: 0x0e1b2e,
+        fogColor: 0x0e1b2e,
+        fog: [35, 140],
+        ground: 0x7dd3fc,
+        accent: 0xffffff,
+        radius: 21,
+        cameraRig: {
+          position: new THREE.Vector3(0, 30, 42),
+          target: new THREE.Vector3(0, 1, 0),
+          fov: 50,
+          smoothing: 0.06
+        }
+      },
+      maze_race: {
+        background: 0x0a0f14,
+        fogColor: 0x0a0f14,
+        fog: [30, 120],
+        ground: 0x1abc9c,
+        accent: 0xf39c12,
+        radius: 20,
+        cameraRig: {
+          position: new THREE.Vector3(0, 40, 0),
+          target: new THREE.Vector3(0, 0, 0),
+          fov: 45,
+          smoothing: 0.05
+        }
+      },
+      default: {
+        background: 0x1a1a2e,
+        fogColor: 0x1a1a2e,
+        fog: [30, 120],
+        ground: 0x6c5ce7,
+        accent: 0x00cec9,
+        radius: 18,
+        cameraRig: {
+          position: new THREE.Vector3(0, 24, 32),
+          target: new THREE.Vector3(0, 2, 0),
+          fov: 60,
+          smoothing: 0.08
+        }
+      }
+    };
+
+    const theme = themes[minigameId] || themes.default;
+
+    this.arenaRadius = theme.radius ?? 18;
+    this.applyArenaTheme(theme);
+    this.configureCameraRig(minigameId, theme.cameraRig);
+
+    switch (minigameId) {
+      case 'coin_chaos':
+        this.createCoinChaosArena(theme);
+        break;
+      case 'platform_peril':
+        this.createPlatformPerilArena(theme);
+        break;
+      case 'bumper_balls':
+        this.createBumperBallsArena(theme);
+        break;
+      case 'hot_potato':
+        this.createHotPotatoArena(theme);
+        break;
+      case 'ice_skating':
+        this.createIceSkatingArena(theme);
+        break;
+      case 'maze_race':
+        this.createMazeRaceArena(theme);
+        break;
+      default:
+        this.createDefaultArena(theme);
+    }
+  }
+
+  applyArenaTheme(theme = {}) {
+    if (!this.scene || typeof THREE === 'undefined') return;
+
+    const bgColor = new THREE.Color(theme.background ?? 0x1a1a2e);
+    const fogColor = new THREE.Color(theme.fogColor ?? theme.background ?? 0x1a1a2e);
+    const fogNear = theme.fog?.[0] ?? 30;
+    const fogFar = theme.fog?.[1] ?? 120;
+
+    this.scene.background = bgColor;
+    this.scene.fog = new THREE.Fog(fogColor, fogNear, fogFar);
+  }
+
+  configureCameraRig(minigameId, overrides = {}) {
+    if (!this.camera) return;
+
+    const baseRig = {
+      position: new THREE.Vector3(0, 24, 32),
+      target: new THREE.Vector3(0, 2, 0),
+      fov: 60,
+      smoothing: 0.08,
+      followPlayer: false
+    };
+
+    const rig = { ...baseRig, ...overrides };
+    this.cameraRig = rig;
+
+    // Immediately place camera to avoid initial frame pop
+    if (rig.position) {
+      this.camera.position.copy(rig.position);
+    }
+    if (rig.target) {
+      this.camera.lookAt(rig.target);
+    }
+    this.camera.fov = rig.fov || 60;
+    this.camera.updateProjectionMatrix();
+  }
+
+  createDefaultArena(theme = {}) {
+    if (!this.scene) return;
+
+    const groundColor = theme.ground ?? 0x6c5ce7;
+    const accentColor = theme.accent ?? 0x00cec9;
+
+    // Main stage
+    const platformGeometry = new THREE.CylinderGeometry(24, 24, 1.2, 48);
     const platformMaterial = new THREE.MeshStandardMaterial({
-      color: 0x6c5ce7,
-      metalness: 0.3,
-      roughness: 0.7
+      color: groundColor,
+      metalness: 0.35,
+      roughness: 0.4
     });
     const platform = new THREE.Mesh(platformGeometry, platformMaterial);
-    platform.position.y = -1;
+    platform.position.y = -0.6;
     platform.receiveShadow = true;
     this.scene.add(platform);
 
-    // Grid pattern on platform
-    const gridHelper = new THREE.GridHelper(40, 20, 0x9b59b6, 0x8e44ad);
-    gridHelper.position.y = 0.01;
+    // Accent ring
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(18.5, 0.5, 16, 64),
+      new THREE.MeshStandardMaterial({ color: accentColor, emissive: accentColor, emissiveIntensity: 0.35 })
+    );
+    ring.rotation.x = Math.PI / 2;
+    ring.position.y = 0.4;
+    ring.castShadow = true;
+    this.scene.add(ring);
+
+    // Thin grid overlay for readability
+    const gridHelper = new THREE.GridHelper(38, 24, accentColor, groundColor);
+    gridHelper.position.y = 0.05;
     this.scene.add(gridHelper);
 
-    // Add minigame-specific elements
-    switch (minigameId) {
-      case 'coin_chaos':
-        this.createCoinChaosArena();
-        break;
-      case 'platform_peril':
-        this.createPlatformPerilArena();
-        break;
-      case 'bumper_balls':
-        this.createBumperBallsArena();
-        break;
-      case 'hot_potato':
-        this.createHotPotatoArena();
-        break;
-      default:
-        this.createDefaultArena();
-    }
-  }
-
-  createDefaultArena() {
-    // Border walls (invisible but for collision)
-    const wallHeight = 5;
-    const wallMaterial = new THREE.MeshStandardMaterial({
-      color: 0x9b59b6,
-      transparent: true,
-      opacity: 0.3
-    });
-
-    // Decorative pillars at corners
-    for (let i = 0; i < 4; i++) {
-      const angle = (i / 4) * Math.PI * 2;
-      const pillarGeometry = new THREE.CylinderGeometry(1, 1.2, 8, 8);
-      const pillar = new THREE.Mesh(pillarGeometry, wallMaterial);
-      pillar.position.set(Math.cos(angle) * 18, 3, Math.sin(angle) * 18);
+    // Spotlight pillars
+    for (let i = 0; i < 6; i++) {
+      const angle = (i / 6) * Math.PI * 2;
+      const pillarHeight = 10 + Math.sin(angle * 2) * 1.5;
+      const pillar = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.8, 0.8, pillarHeight, 10),
+        new THREE.MeshStandardMaterial({ color: groundColor * 0.9 })
+      );
+      pillar.position.set(Math.cos(angle) * 17, pillarHeight / 2 - 0.4, Math.sin(angle) * 17);
       pillar.castShadow = true;
+      pillar.receiveShadow = true;
       this.scene.add(pillar);
 
-      // Glow on top of pillar
-      const glowGeometry = new THREE.SphereGeometry(0.8, 16, 16);
-      const glowMaterial = new THREE.MeshBasicMaterial({ color: 0x00cec9 });
-      const glow = new THREE.Mesh(glowGeometry, glowMaterial);
-      glow.position.copy(pillar.position);
-      glow.position.y = 7.5;
-      this.scene.add(glow);
+      const light = new THREE.PointLight(accentColor, 0.4, 18);
+      light.position.set(pillar.position.x, pillarHeight + 1, pillar.position.z);
+      this.scene.add(light);
     }
   }
 
-  createCoinChaosArena() {
-    this.createDefaultArena();
-    
-    // Add coin spawners (visual indicators)
-    for (let i = 0; i < 5; i++) {
-      const spawnerGeometry = new THREE.TorusGeometry(2, 0.3, 8, 16);
-      const spawnerMaterial = new THREE.MeshBasicMaterial({ color: 0xfdcb6e });
-      const spawner = new THREE.Mesh(spawnerGeometry, spawnerMaterial);
-      spawner.rotation.x = Math.PI / 2;
-      spawner.position.set(
-        (Math.random() - 0.5) * 30,
-        10,
-        (Math.random() - 0.5) * 30
+  createCoinChaosArena(theme = {}) {
+    if (!this.scene) return;
+
+    const ground = theme.ground ?? 0x14f1d9;
+    const accent = theme.accent ?? 0xffc857;
+    this.arenaRadius = 22;
+    this.coinSpawners = [];
+
+    // Hex floor
+    const floor = new THREE.Mesh(
+      new THREE.CylinderGeometry(24, 24, 1.2, 6, 1, false),
+      new THREE.MeshStandardMaterial({ color: ground, metalness: 0.35, roughness: 0.35 })
+    );
+    floor.position.y = -0.6;
+    floor.receiveShadow = true;
+    this.scene.add(floor);
+
+    // Raised catwalks in X pattern
+    const catwalkMat = new THREE.MeshStandardMaterial({ color: accent, emissive: accent, emissiveIntensity: 0.25, metalness: 0.2 });
+    const buildCatwalk = (rot) => {
+      const walk = new THREE.Mesh(new THREE.BoxGeometry(28, 0.6, 3), catwalkMat.clone());
+      walk.position.y = 1.2;
+      walk.rotation.y = rot;
+      walk.castShadow = true;
+      walk.receiveShadow = true;
+      this.scene.add(walk);
+    };
+    buildCatwalk(0);
+    buildCatwalk(Math.PI / 3);
+    buildCatwalk(-Math.PI / 3);
+
+    // Pillar spawners
+    for (let i = 0; i < 6; i++) {
+      const radius = 10 + Math.random() * 6;
+      const angle = (i / 6) * Math.PI * 2;
+      const x = Math.cos(angle) * radius;
+      const z = Math.sin(angle) * radius;
+      const pillar = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.9, 1.2, 6 + Math.random() * 2, 10),
+        new THREE.MeshStandardMaterial({ color: accent, emissive: accent, emissiveIntensity: 0.35 })
       );
-      this.scene.add(spawner);
+      pillar.position.set(x, 3, z);
+      pillar.castShadow = true;
+      this.scene.add(pillar);
+      this.coinSpawners.push(new THREE.Vector3(x, 6, z));
     }
+
+    // Center prism beacon
+    const beacon = new THREE.Mesh(
+      new THREE.CylinderGeometry(2.2, 1.2, 5, 8, 1, true),
+      new THREE.MeshStandardMaterial({ color: accent, transparent: true, opacity: 0.28, emissive: accent, emissiveIntensity: 0.3, side: THREE.DoubleSide })
+    );
+    beacon.position.y = 2.5;
+    this.scene.add(beacon);
   }
 
-  createPlatformPerilArena() {
-    // Multiple floating platforms
+  createPlatformPerilArena(theme = {}) {
+    if (!this.scene) return;
+
+    const baseColor = theme.ground ?? 0x6c5ce7;
+    const safeColor = theme.accent ?? 0x00f5d4;
     this.platforms = [];
-    const platformCount = 7;
-    
-    for (let i = 0; i < platformCount; i++) {
-      const size = 3 + Math.random() * 4;
-      const geometry = new THREE.BoxGeometry(size, 0.5, size);
+
+    const buildPlatform = (opts) => {
+      const geometry = new THREE.BoxGeometry(opts.width, 0.6, opts.depth);
       const material = new THREE.MeshStandardMaterial({
-        color: i === 0 ? 0x00b894 : 0x6c5ce7,
-        metalness: 0.2,
-        roughness: 0.8
+        color: opts.safe ? safeColor : baseColor,
+        metalness: 0.25,
+        roughness: 0.65
       });
-      const platform = new THREE.Mesh(geometry, material);
-      platform.position.set(
-        (Math.random() - 0.5) * 25,
-        Math.random() * 3,
-        (Math.random() - 0.5) * 25
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.position.set(opts.x, opts.y, opts.z);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      this.scene.add(mesh);
+
+      this.platforms.push({
+        ...opts,
+        originalWidth: opts.width,
+        originalDepth: opts.depth,
+        mesh,
+        shrinking: false,
+        shrinkAmount: 0,
+        shrinkSpeed: opts.shrinkSpeed ?? 0.2
+      });
+    };
+
+    buildPlatform({ x: 0, z: 0, y: 0, width: 8, depth: 8, safe: true, shrinkSpeed: 0.15 });
+
+    for (let i = 0; i < 6; i++) {
+      const angle = (i / 6) * Math.PI * 2;
+      const radius = 10 + Math.random() * 6;
+      buildPlatform({
+        x: Math.cos(angle) * radius,
+        z: Math.sin(angle) * radius,
+        y: 1 + Math.random() * 2,
+        width: 3.5 + Math.random() * 2,
+        depth: 3.5 + Math.random() * 2,
+        safe: i % 2 === 0,
+        shrinkSpeed: 0.22 + Math.random() * 0.1
+      });
+    }
+
+    // Floating crystals as landmarks
+    for (let i = 0; i < 4; i++) {
+      const crystal = new THREE.Mesh(
+        new THREE.DodecahedronGeometry(1 + Math.random() * 0.5),
+        new THREE.MeshStandardMaterial({ color: safeColor, emissive: safeColor, emissiveIntensity: 0.4 })
       );
-      platform.castShadow = true;
-      platform.receiveShadow = true;
-      platform.userData = { originalSize: size, shrinking: false };
-      this.scene.add(platform);
-      this.platforms.push(platform);
+      crystal.position.set((Math.random() - 0.5) * 20, 4 + Math.random() * 2, (Math.random() - 0.5) * 20);
+      crystal.castShadow = true;
+      this.scene.add(crystal);
     }
   }
 
-  createBumperBallsArena() {
-    // Circular arena with edges
-    const edgeGeometry = new THREE.TorusGeometry(20, 0.5, 8, 32);
-    const edgeMaterial = new THREE.MeshStandardMaterial({ color: 0xe74c3c });
-    const edge = new THREE.Mesh(edgeGeometry, edgeMaterial);
-    edge.rotation.x = Math.PI / 2;
-    edge.position.y = 0.25;
-    this.scene.add(edge);
+  createBumperBallsArena(theme = {}) {
+    if (!this.scene) return;
+
+    const groundColor = theme.ground ?? 0xe74c3c;
+    const accent = theme.accent ?? 0xfad390;
+
+    // Stadium track using twin ovals
+    const baseMat = new THREE.MeshStandardMaterial({ color: groundColor, metalness: 0.3, roughness: 0.35 });
+    const padMat = new THREE.MeshStandardMaterial({ color: accent, emissive: accent, emissiveIntensity: 0.4 });
+
+    const buildOval = (x) => {
+      const oval = new THREE.Mesh(new THREE.CylinderGeometry(10, 10, 1.2, 32), baseMat.clone());
+      oval.position.set(x, -0.6, 0);
+      oval.rotation.y = Math.PI / 2;
+      oval.receiveShadow = true;
+      this.scene.add(oval);
+    };
+    buildOval(-10);
+    buildOval(10);
+
+    // Connect the ovals with straight track
+    const connector = new THREE.Mesh(new THREE.BoxGeometry(20, 1.2, 14), baseMat.clone());
+    connector.position.y = -0.6;
+    connector.receiveShadow = true;
+    this.scene.add(connector);
+
+    // Safety walls
+    const wallMat = new THREE.MeshStandardMaterial({ color: accent, emissive: accent, emissiveIntensity: 0.25 });
+    const walls = [
+      { x: 0, z: 7.5, rot: 0 },
+      { x: 0, z: -7.5, rot: 0 },
+      { x: 18, z: 0, rot: Math.PI / 2 },
+      { x: -18, z: 0, rot: Math.PI / 2 }
+    ];
+    walls.forEach((w) => {
+      const wall = new THREE.Mesh(new THREE.BoxGeometry(38, 1.4, 1), wallMat.clone());
+      wall.position.set(w.x, 0.1, w.z);
+      wall.rotation.y = w.rot;
+      wall.castShadow = true;
+      wall.receiveShadow = true;
+      this.scene.add(wall);
+    });
+
+    // Boost strips on each straightaway
+    const addBoost = (z) => {
+      const boost = new THREE.Mesh(new THREE.BoxGeometry(16, 0.2, 1.5), padMat.clone());
+      boost.position.set(0, 0, z);
+      boost.name = 'bumper_boost';
+      this.scene.add(boost);
+    };
+    addBoost(4.5);
+    addBoost(-4.5);
   }
 
-  createHotPotatoArena() {
-    this.createDefaultArena();
-    
+  createHotPotatoArena(theme = {}) {
+    if (!this.scene) return;
+
+    const groundColor = theme.ground ?? 0xf25f5c;
+    const accent = theme.accent ?? 0xffd166;
+
+    // Cracked lava tiles with gaps
+    const tileMat = new THREE.MeshStandardMaterial({ color: groundColor, emissive: groundColor, emissiveIntensity: 0.35, roughness: 0.6 });
+    const safeMat = new THREE.MeshStandardMaterial({ color: accent, emissive: accent, emissiveIntensity: 0.45, roughness: 0.35 });
+    const tileSize = 5;
+    for (let x = -2; x <= 2; x++) {
+      for (let z = -2; z <= 2; z++) {
+        // Leave center hole and some random gaps
+        if ((x === 0 && z === 0) || Math.random() < 0.12) continue;
+        const isSafe = (Math.abs(x) + Math.abs(z)) % 2 === 0;
+        const tile = new THREE.Mesh(new THREE.BoxGeometry(tileSize, 0.8, tileSize), isSafe ? safeMat.clone() : tileMat.clone());
+        tile.position.set(x * tileSize, -0.4, z * tileSize);
+        tile.receiveShadow = true;
+        tile.castShadow = true;
+        this.scene.add(tile);
+      }
+    }
+
+    // Edge cliffs
+    const rim = new THREE.Mesh(
+      new THREE.CylinderGeometry(30, 32, 4, 16, 1, true),
+      new THREE.MeshStandardMaterial({ color: groundColor * 0.7, roughness: 0.8, side: THREE.DoubleSide })
+    );
+    rim.position.y = -2.4;
+    this.scene.add(rim);
+
     // Hot potato (bomb) mesh - will be attached to players
-    const bombGeometry = new THREE.SphereGeometry(0.8, 16, 16);
-    const bombMaterial = new THREE.MeshStandardMaterial({ color: 0xe74c3c });
+    const bombGeometry = new THREE.SphereGeometry(0.9, 16, 16);
+    const bombMaterial = new THREE.MeshStandardMaterial({ color: 0x2b2d42, metalness: 0.4, roughness: 0.3 });
     this.hotPotato = new THREE.Mesh(bombGeometry, bombMaterial);
     this.hotPotato.visible = false;
+    this.hotPotato.castShadow = true;
     this.scene.add(this.hotPotato);
     
     // Fuse
-    const fuseGeometry = new THREE.CylinderGeometry(0.05, 0.05, 0.5, 8);
-    const fuseMaterial = new THREE.MeshBasicMaterial({ color: 0xf39c12 });
+    const fuseGeometry = new THREE.CylinderGeometry(0.06, 0.06, 0.7, 8);
+    const fuseMaterial = new THREE.MeshBasicMaterial({ color: accent });
     const fuse = new THREE.Mesh(fuseGeometry, fuseMaterial);
-    fuse.position.y = 0.8;
+    fuse.position.y = 0.95;
     this.hotPotato.add(fuse);
   }
 
+  createIceSkatingArena(theme = {}) {
+    if (!this.scene) return;
+
+    const iceColor = theme.ground ?? 0x7dd3fc;
+    const accent = theme.accent ?? 0xffffff;
+
+    // Figure-eight rink
+    const padMat = new THREE.MeshStandardMaterial({ color: iceColor, metalness: 0.55, roughness: 0.2 });
+    const loop = (x) => {
+      const oval = new THREE.Mesh(new THREE.CylinderGeometry(11, 11, 0.8, 32), padMat.clone());
+      oval.position.set(x, -0.4, 0);
+      oval.rotation.x = -Math.PI / 2;
+      oval.receiveShadow = true;
+      this.scene.add(oval);
+    };
+    loop(-8);
+    loop(8);
+
+    // Connect loops with skinny bridge
+    const bridge = new THREE.Mesh(new THREE.BoxGeometry(8, 0.8, 6), padMat.clone());
+    bridge.position.set(0, -0.4, 0);
+    bridge.receiveShadow = true;
+    this.scene.add(bridge);
+
+    // Frosted glass boards around each loop
+    const glassMat = new THREE.MeshStandardMaterial({ color: accent, transparent: true, opacity: 0.35 });
+    const makeBoards = (x) => {
+      const boards = new THREE.Mesh(new THREE.CylinderGeometry(11.5, 11.5, 1.2, 32, 1, true), glassMat.clone());
+      boards.position.set(x, 0.6, 0);
+      boards.rotation.x = -Math.PI / 2;
+      this.scene.add(boards);
+    };
+    makeBoards(-8);
+    makeBoards(8);
+
+    // Center ribbon light
+    const ribbon = new THREE.Mesh(
+      new THREE.BoxGeometry(9, 0.12, 1.4),
+      new THREE.MeshStandardMaterial({ color: accent, emissive: accent, emissiveIntensity: 0.4 })
+    );
+    ribbon.position.set(0, 0.1, 0);
+    this.scene.add(ribbon);
+  }
+
+  createMazeRaceArena(theme = {}) {
+    if (!this.scene) return;
+
+    const wallColor = theme.ground ?? 0x1abc9c;
+    const floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(44, 44),
+      new THREE.MeshStandardMaterial({ color: wallColor * 0.8, roughness: 0.7 })
+    );
+    floor.rotation.x = -Math.PI / 2;
+    floor.receiveShadow = true;
+    this.scene.add(floor);
+
+    this.mazeWalls = [];
+    const wallGeo = new THREE.BoxGeometry(2, 2, 10);
+    const wallMat = new THREE.MeshStandardMaterial({ color: wallColor, roughness: 0.6, metalness: 0.15 });
+
+    // Grid-based labyrinth
+    const cells = [
+      [1, 1, 1, 1, 1, 1, 1, 1, 1],
+      [1, 0, 0, 1, 0, 0, 0, 0, 1],
+      [1, 0, 1, 1, 0, 1, 1, 0, 1],
+      [1, 0, 1, 0, 0, 0, 1, 0, 1],
+      [1, 0, 1, 0, 1, 0, 1, 0, 1],
+      [1, 0, 0, 0, 1, 0, 1, 0, 1],
+      [1, 1, 1, 0, 1, 0, 0, 0, 1],
+      [1, 0, 0, 0, 0, 0, 1, 0, 1],
+      [1, 1, 1, 1, 1, 1, 1, 1, 1]
+    ];
+    const cellSize = 5;
+    const offset = (cells.length - 1) * cellSize * 0.5;
+
+    cells.forEach((row, r) => {
+      row.forEach((cell, c) => {
+        if (cell === 1) {
+          const wall = new THREE.Mesh(wallGeo, wallMat.clone());
+          wall.position.set(c * cellSize - offset, 1, r * cellSize - offset);
+          wall.castShadow = true;
+          wall.receiveShadow = true;
+          wall.name = `maze_wall_${r}_${c}`;
+          this.scene.add(wall);
+          this.mazeWalls.push(wall);
+        }
+      });
+    });
+  }
+
   createPlayerMesh() {
-    // Create a cute character mesh
-    this.playerMesh = new THREE.Group();
+    const characterId = this.app.state.user?.profile?.selected_character || 'jojo';
+    const style = this.getCharacterStyle(characterId);
+    this.playerMesh = this.buildCharacterModel(style);
 
-    // Prefer CapsuleGeometry when available, otherwise compose from cylinder + spheres
-    if (typeof THREE.CapsuleGeometry === 'function') {
-      const bodyGeometry = new THREE.CapsuleGeometry(0.5, 1, 8, 16);
-      const bodyMaterial = new THREE.MeshStandardMaterial({
-        color: 0x6c5ce7,
-        metalness: 0.1,
-        roughness: 0.8
-      });
-      const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
-      body.position.y = 1;
-      body.castShadow = true;
-      this.playerMesh.add(body);
-    } else {
-      const bodyMaterial = new THREE.MeshStandardMaterial({
-        color: 0x6c5ce7,
-        metalness: 0.1,
-        roughness: 0.8
-      });
-      const cyl = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 1, 16), bodyMaterial.clone());
-      cyl.position.y = 1;
-      cyl.castShadow = true;
-      this.playerMesh.add(cyl);
-
-      const top = new THREE.Mesh(new THREE.SphereGeometry(0.5, 12, 12), bodyMaterial.clone());
-      top.position.y = 1.6;
-      top.castShadow = true;
-      this.playerMesh.add(top);
-
-      const bottom = new THREE.Mesh(new THREE.SphereGeometry(0.5, 12, 12), bodyMaterial.clone());
-      bottom.position.y = 0.4;
-      bottom.castShadow = true;
-      this.playerMesh.add(bottom);
-    }
-    
-    // Eyes
-    const eyeGeometry = new THREE.SphereGeometry(0.15, 16, 16);
-    const eyeMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
-    const pupilGeometry = new THREE.SphereGeometry(0.08, 16, 16);
-    const pupilMaterial = new THREE.MeshBasicMaterial({ color: 0x2d3436 });
-    
-    const leftEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
-    leftEye.position.set(-0.2, 1.5, 0.4);
-    this.playerMesh.add(leftEye);
-    
-    const leftPupil = new THREE.Mesh(pupilGeometry, pupilMaterial);
-    leftPupil.position.set(-0.2, 1.5, 0.52);
-    this.playerMesh.add(leftPupil);
-    
-    const rightEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
-    rightEye.position.set(0.2, 1.5, 0.4);
-    this.playerMesh.add(rightEye);
-    
-    const rightPupil = new THREE.Mesh(pupilGeometry, pupilMaterial);
-    rightPupil.position.set(0.2, 1.5, 0.52);
-    this.playerMesh.add(rightPupil);
+    // Character badge
+    const badge = new THREE.Mesh(
+      new THREE.CircleGeometry(0.25, 16),
+      new THREE.MeshStandardMaterial({ color: style.accent, emissive: style.accent, emissiveIntensity: 0.4 })
+    );
+    badge.position.set(0, 1.15, 0.62);
+    badge.rotation.x = -Math.PI / 2;
+    this.playerMesh.add(badge);
 
     this.playerMesh.position.set(0, 0, 0);
     this.scene.add(this.playerMesh);
@@ -768,9 +1276,13 @@ export class MinigameController {
       this.playerState.y = this.canvas.height / 2;
     }
 
-    // Create practice bots if in practice mode
+    // Create practice bots if in practice mode (or sync existing ones)
     if (this.isPractice) {
-      this.createPracticeBots();
+      if (!this.practiceBots || this.practiceBots.length === 0) {
+        this.createPracticeBots();
+      } else {
+        this.syncPracticeBotMeshes();
+      }
     }
 
     // Initialize game state
@@ -780,16 +1292,22 @@ export class MinigameController {
   }
 
   createPracticeBots() {
+    this.clearBotMeshes();
     this.practiceBots = [];
-    const botCount = 3;
+    const botCount = 6;
+    const characters = ['jojo', 'mimi'];
     
     for (let i = 0; i < botCount; i++) {
       const bot = {
         id: `bot_${i}`,
         username: `Bot ${i + 1}`,
+        characterId: characters[i % characters.length],
         x: (Math.random() - 0.5) * 20,
         y: 0,
         z: (Math.random() - 0.5) * 20,
+        vx: 0,
+        vy: 0,
+        vz: 0,
         score: 0,
         alive: true,
         ai: {
@@ -800,73 +1318,43 @@ export class MinigameController {
       };
       
       this.practiceBots.push(bot);
-      
-      // Create bot mesh in 3D
-      if (this.is3D) {
-        this.createBotMesh(bot);
-      }
+    }
+
+    // Create bot meshes in 3D
+    if (this.is3D) {
+      this.practiceBots.forEach(bot => this.createBotMesh(bot));
     }
   }
 
   createBotMesh(bot) {
-    const colors = [0x00cec9, 0xfd79a8, 0xfdcb6e];
-    const colorIndex = parseInt(bot.id.split('_')[1]) % colors.length;
-    
-    let mesh = new THREE.Group();
+    const style = this.getCharacterStyle(bot.characterId);
+    const mesh = this.buildCharacterModel(style);
 
-    // Prefer THREE.CapsuleGeometry when available, otherwise build a composite capsule (cylinder + spheres)
-    if (typeof THREE.CapsuleGeometry === 'function') {
-      const bodyGeometry = new THREE.CapsuleGeometry(0.5, 1, 8, 16);
-      const bodyMaterial = new THREE.MeshStandardMaterial({
-        color: colors[colorIndex],
-        metalness: 0.1,
-        roughness: 0.8
-      });
-      const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
-      body.position.y = 1;
-      body.castShadow = true;
-      mesh.add(body);
-    } else {
-      // Fallback composite capsule
-      const cylGeo = new THREE.CylinderGeometry(0.5, 0.5, 1, 16);
-      const sphGeo = new THREE.SphereGeometry(0.5, 12, 12);
-      const bodyMaterial = new THREE.MeshStandardMaterial({
-        color: colors[colorIndex],
-        metalness: 0.1,
-        roughness: 0.8
-      });
+    // Add simple accessory to differentiate bots
+    const visor = new THREE.Mesh(
+      new THREE.BoxGeometry(0.75, 0.18, 0.1),
+      new THREE.MeshStandardMaterial({ color: style.secondary, emissive: style.secondary, emissiveIntensity: 0.25 })
+    );
+    visor.position.set(0, 1.55, 0.6);
+    mesh.add(visor);
 
-      const cylinder = new THREE.Mesh(cylGeo, bodyMaterial.clone());
-      cylinder.position.y = 1;
-      cylinder.castShadow = true;
-      mesh.add(cylinder);
-
-      const top = new THREE.Mesh(sphGeo, bodyMaterial.clone());
-      top.position.y = 1.6;
-      top.castShadow = true;
-      mesh.add(top);
-
-      const bottom = new THREE.Mesh(sphGeo, bodyMaterial.clone());
-      bottom.position.y = 0.4;
-      bottom.castShadow = true;
-      mesh.add(bottom);
-    }
-    
-    // Eyes (robot style)
-    const eyeGeometry = new THREE.BoxGeometry(0.2, 0.1, 0.1);
-    const eyeMaterial = new THREE.MeshBasicMaterial({ color: 0xe74c3c });
-    
-    const leftEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
-    leftEye.position.set(-0.15, 1.5, 0.45);
-    mesh.add(leftEye);
-    
-    const rightEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
-    rightEye.position.set(0.15, 1.5, 0.45);
-    mesh.add(rightEye);
-    
     mesh.position.set(bot.x, bot.y, bot.z);
     this.scene.add(mesh);
     this.otherPlayerMeshes.set(bot.id, mesh);
+  }
+
+  clearBotMeshes() {
+    if (!this.scene) return;
+    this.otherPlayerMeshes.forEach(mesh => {
+      try { this.scene.remove(mesh); } catch (e) {}
+    });
+    this.otherPlayerMeshes.clear();
+  }
+
+  syncPracticeBotMeshes() {
+    if (!this.is3D || !this.practiceBots) return;
+    this.clearBotMeshes();
+    this.practiceBots.forEach(bot => this.createBotMesh(bot));
   }
 
   createGameState() {
@@ -885,6 +1373,8 @@ export class MinigameController {
       ],
       coins: this.generateCoins(),
       timeLeft: this.currentMinigame?.duration / 1000 || 60,
+      hotPotatoHolder: this.currentMinigame?.id === 'hot_potato' ? (this.app.state.user?.id || 'local') : null,
+      bombTimer: this.currentMinigame?.id === 'hot_potato' ? 15 : undefined,
       started: true
     };
   }
@@ -899,7 +1389,8 @@ export class MinigameController {
         x: (Math.random() - 0.5) * 30,
         y: this.is3D ? 1 : Math.random() * (this.canvas?.height - 100 || 500) + 50,
         z: this.is3D ? (Math.random() - 0.5) * 30 : 0,
-        collected: false
+        collected: false,
+        value: Math.random() > 0.8 ? 3 : 1
       });
     }
     
@@ -958,40 +1449,60 @@ export class MinigameController {
   }
 
   showResults(data) {
-    const results = document.querySelector('.minigame-results');
-    const winner = document.getElementById('minigame-winner');
-    const list = document.getElementById('minigame-results-list');
+    this.setupResultsUI();
 
-    if (winner) winner.textContent = data.winner?.username || 'No winner';
-    
-    if (list && data.rankings) {
-      list.innerHTML = data.rankings.map((player, index) => `
+    if (this.resultsAutoHide) {
+      clearTimeout(this.resultsAutoHide);
+      this.resultsAutoHide = null;
+    }
+
+    const container = this.resultsUI.container;
+    const list = this.resultsUI.list;
+    const rankings = data.rankings || [];
+
+    if (list) {
+      list.innerHTML = rankings.map((player, index) => `
         <div class="result-row ${index === 0 ? 'winner' : ''}">
           <span class="result-position">${index + 1}</span>
           <span class="result-name">${player.username}</span>
-          <span class="result-score">${player.score || 0}</span>
-          <span class="result-reward">${player.reward || 0} 🪙</span>
+          <span class="result-score">${player.score ?? 0}</span>
+          <span class="result-reward">${player.reward ?? 0} 🪙</span>
         </div>
       `).join('');
     }
 
-    results?.classList.add('active');
+    container?.classList.add('active');
 
-    // Play appropriate sound
-    const myRanking = data.rankings?.findIndex(p => p.id === this.app.state.user?.id);
+    const localId = this.isPractice ? 'local' : this.app.state.user?.id;
+    const myRanking = rankings.findIndex(p => p.id === localId);
     if (myRanking === 0) {
       this.app.audio.playSFX('minigameWin');
     } else {
       this.app.audio.playSFX('minigameLose');
     }
 
-    // Auto-close after delay
-    setTimeout(() => {
-      results?.classList.remove('active');
-      if (!this.isPractice) {
-        this.app.navigateTo('game');
-      }
-    }, 5000);
+    // Auto-close only for non-practice sessions; practice waits for Continue
+    if (!this.isPractice) {
+      this.resultsAutoHide = setTimeout(() => this.onResultsContinue(true), 5000);
+    }
+  }
+
+  onResultsContinue(auto = false) {
+    if (this.resultsAutoHide) {
+      clearTimeout(this.resultsAutoHide);
+      this.resultsAutoHide = null;
+    }
+
+    this.resultsUI.container?.classList.remove('active');
+
+    // In practice, return to the practice menu; otherwise back to game screen
+    if (this.isPractice) {
+      this.app.navigateTo('practice');
+    } else if (!auto) {
+      this.app.navigateTo('game');
+    } else {
+      this.app.navigateTo('game');
+    }
   }
 
   startGameLoop() {
@@ -1004,6 +1515,9 @@ export class MinigameController {
       const delta = (currentTime - this.lastTime) / 1000;
       this.lastTime = currentTime;
       
+      // Poll gamepads for input
+      this.pollGamepads();
+
       this.update(delta);
       this.render();
       
@@ -1048,6 +1562,7 @@ export class MinigameController {
       'button_bash': () => this.updateButtonBash(delta),
       'coin_chaos': () => this.updateCoinChaos(delta),
       'platform_peril': () => this.updatePlatformPeril(delta),
+      'bumper_balls': () => this.updateBumperBalls(delta),
       'memory_match': () => this.updateMemoryMatch(delta),
       'balloon_burst': () => this.updateBalloonBurst(delta),
       'hot_potato': () => this.updateHotPotato(delta),
@@ -1068,23 +1583,22 @@ export class MinigameController {
         this.updateDefaultMinigame(delta);
       }
     }
+
+    // Refresh HUD overlays with the latest state
+    this.updateUI();
   }
 
   // 3D player update with smooth movement physics
   update3DPlayer(delta) {
     const maxSpeed = 12;
-    const acceleration = 40;
-    const friction = 0.85;
+    const acceleration = 42;
+    const friction = 0.88;
     const gravity = 30;
-    const jumpForce = 15;
+    const jumpForce = 16;
 
-    // Handle continuous movement input with acceleration
-    let accelX = 0, accelZ = 0;
-    
-    if (this.keys['KeyW'] || this.keys['ArrowUp']) accelZ = -acceleration;
-    if (this.keys['KeyS'] || this.keys['ArrowDown']) accelZ = acceleration;
-    if (this.keys['KeyA'] || this.keys['ArrowLeft']) accelX = -acceleration;
-    if (this.keys['KeyD'] || this.keys['ArrowRight']) accelX = acceleration;
+    const { moveX, moveZ, jumpPressed } = this.getInputAxes();
+    let accelX = moveX * acceleration;
+    let accelZ = moveZ * acceleration;
     
     // Apply acceleration
     this.playerState.vx += accelX * delta;
@@ -1110,15 +1624,14 @@ export class MinigameController {
     if (!this.playerState.onGround) {
       this.playerState.vy -= gravity * delta;
     } else {
-      // Jump on Space
-      if (this.keys['Space'] && !this.playerState.jumpPressed) {
+      if (jumpPressed && !this.playerState.jumpPressed) {
         this.playerState.vy = jumpForce;
         this.playerState.onGround = false;
         this.playerState.jumpPressed = true;
       }
     }
     
-    if (!this.keys['Space']) this.playerState.jumpPressed = false;
+    if (!jumpPressed) this.playerState.jumpPressed = false;
     
     this.playerState.y += this.playerState.vy * delta;
 
@@ -1129,10 +1642,11 @@ export class MinigameController {
       this.playerState.onGround = true;
     }
 
-    // Arena bounds (circular, 18 unit radius)
+    // Arena bounds (circular radius)
+    const arenaRadius = this.arenaRadius || 18;
     const dist = Math.sqrt(this.playerState.x ** 2 + this.playerState.z ** 2);
-    if (dist > 18) {
-      const scale = 18 / dist;
+    if (dist > arenaRadius) {
+      const scale = arenaRadius / dist;
       this.playerState.x *= scale;
       this.playerState.z *= scale;
       // Bounce slightly
@@ -1167,8 +1681,9 @@ export class MinigameController {
         const dist = Math.sqrt(dx * dx + dz * dz);
         if (dist < 2) {
           coin.collected = true;
-          this.playerState.score++;
-          this.app.audio?.playSFX('coin');
+          const value = coin.isBomb ? -2 : (coin.value || 1);
+          this.playerState.score += value;
+          this.app.audio?.playSFX(coin.isBomb ? 'hazard' : value > 1 ? 'rareCoin' : 'coin');
           const coinMesh = this.scene?.getObjectByName(`coin_${coin.id}`);
           if (coinMesh) this.scene.remove(coinMesh);
         }
@@ -1202,14 +1717,7 @@ export class MinigameController {
   }
 
   render3D() {
-    // Update camera to follow player slightly
-    if (this.camera && this.playerMesh) {
-      const targetX = this.playerMesh.position.x * 0.3;
-      const targetZ = this.playerMesh.position.z * 0.3 + 25;
-      this.camera.position.x += (targetX - this.camera.position.x) * 0.05;
-      this.camera.position.z += (targetZ - this.camera.position.z) * 0.05;
-      this.camera.lookAt(this.playerMesh.position.x * 0.5, 0, this.playerMesh.position.z * 0.5);
-    }
+    this.updateCameraRig();
 
     // Animate coins
     this.animateCoins();
@@ -1219,6 +1727,24 @@ export class MinigameController {
 
     // Render 2D HUD on top using overlay
     this.renderHUD();
+  }
+
+  updateCameraRig() {
+    if (!this.camera || !this.cameraRig) return;
+
+    const smoothing = this.cameraRig.smoothing ?? 0.08;
+    const targetPos = this.cameraRig.position;
+    if (targetPos) {
+      this.camera.position.lerp(targetPos, smoothing);
+    }
+
+    const lookTarget = this.cameraRig.target?.clone ? this.cameraRig.target.clone() : new THREE.Vector3(0, 0, 0);
+    if (this.cameraRig.followPlayer && this.playerMesh) {
+      lookTarget.x += this.playerMesh.position.x * 0.15;
+      lookTarget.z += this.playerMesh.position.z * 0.15;
+    }
+
+    this.camera.lookAt(lookTarget);
   }
 
   animateCoins() {
@@ -1233,11 +1759,14 @@ export class MinigameController {
       
       // Create coin mesh if it doesn't exist
       if (!coinMesh) {
+        const color = coin.isBomb ? 0xe74c3c : (coin.value > 1 ? 0xb8ff5e : 0xfdcb6e);
         const geometry = new THREE.CylinderGeometry(0.5, 0.5, 0.1, 16);
         const material = new THREE.MeshStandardMaterial({
-          color: 0xfdcb6e,
+          color,
           metalness: 0.8,
-          roughness: 0.2
+          roughness: 0.2,
+          emissive: coin.isBomb ? 0xe74c3c : 0x000000,
+          emissiveIntensity: coin.isBomb ? 0.35 : 0
         });
         coinMesh = new THREE.Mesh(geometry, material);
         coinMesh.name = `coin_${coin.id}`;
@@ -1361,40 +1890,110 @@ export class MinigameController {
   // Hot Potato minigame - pass the bomb
   updateHotPotato(delta) {
     this.update3DPlayer(delta);
-    
-    // Manage bomb timer
+
+    // Initialize holder and timer
+    if (!this.gameState.hotPotatoHolder) {
+      this.gameState.hotPotatoHolder = this.app.state.user?.id || 'local';
+      this.gameState.bombTimer = 15;
+    }
     if (!this.gameState.bombTimer) {
-      this.gameState.bombTimer = 30 + Math.random() * 10;
+      this.gameState.bombTimer = 15;
     }
-    
+
     this.gameState.bombTimer -= delta;
-    
+
+    // Attach bomb mesh to holder
+    if (this.hotPotato) {
+      const holderId = this.gameState.hotPotatoHolder;
+      const holderMesh = holderId === 'local' ? this.playerMesh : this.otherPlayerMeshes.get(holderId);
+      if (holderMesh) {
+        this.hotPotato.visible = true;
+        this.hotPotato.position.copy(holderMesh.position);
+        this.hotPotato.position.y += 1.2;
+      }
+    }
+
+    // Handle explosion
     if (this.gameState.bombTimer <= 0) {
-      this.playerState.alive = false;
-      this.playerState.score = Math.max(0, this.playerState.score - 5);
-      this.gameState.bombTimer = 30;
+      const holderId = this.gameState.hotPotatoHolder;
+      if (holderId === 'local') {
+        this.playerState.score = Math.max(0, this.playerState.score - 5);
+        this.playerState.alive = false;
+      } else {
+        const bot = this.practiceBots?.find(b => b.id === holderId);
+        if (bot) bot.alive = false;
+      }
+      this.app.audio?.playSFX('potatoBoom');
+
+      // Pick a new living holder
+      const candidates = [
+        { id: 'local', alive: this.playerState.alive !== false },
+        ...(this.practiceBots || [])
+      ].filter(p => p.alive);
+
+      if (candidates.length > 0) {
+        const next = candidates[Math.floor(Math.random() * candidates.length)];
+        this.gameState.hotPotatoHolder = next.id;
+        this.gameState.bombTimer = 15 + Math.random() * 5;
+      } else {
+        this.gameState.hotPotatoHolder = null;
+      }
     }
     
-    // Proximity detection to other players (in practice, check bots)
-    if (this.practiceBots && this.practiceBots.length > 0) {
+    // Passing logic (practice only)
+    if (this.practiceBots && this.practiceBots.length > 0 && this.gameState.hotPotatoHolder === 'local') {
       this.practiceBots.forEach(bot => {
         const dx = this.playerState.x - bot.x;
         const dz = this.playerState.z - bot.z;
         const dist = Math.sqrt(dx * dx + dz * dz);
         
         if (dist < 2 && this.keys['Space']) {
-          // Pass bomb to bot
+          this.gameState.hotPotatoHolder = bot.id;
+          this.gameState.bombTimer = 15;
           this.playerState.score += 1;
-          this.gameState.bombTimer = 30;
-          this.app.audio?.playSFX('pass');
+          this.app.audio?.playSFX('potatoPass');
         }
       });
+    }
+
+    // Bots pass back to player if they hold the bomb and are close
+    if (this.practiceBots && this.practiceBots.length > 0 && this.gameState.hotPotatoHolder && this.gameState.hotPotatoHolder !== 'local') {
+      const holderBot = this.practiceBots.find(b => b.id === this.gameState.hotPotatoHolder);
+      if (holderBot) {
+        const dx = holderBot.x - this.playerState.x;
+        const dz = holderBot.z - this.playerState.z;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+        if (dist < 2) {
+          this.gameState.hotPotatoHolder = 'local';
+          this.gameState.bombTimer = 15;
+          this.app.audio?.playSFX('potatoPass');
+        }
+      }
     }
   }
 
   // Bumper Balls minigame - knock other players around
   updateBumperBalls(delta) {
     this.update3DPlayer(delta);
+    const arenaRadius = this.arenaRadius || 18;
+    const boostRadius = 3.2;
+
+    // Center boost pad impulse
+    const distToCenter = Math.sqrt(this.playerState.x ** 2 + this.playerState.z ** 2);
+    if (distToCenter < boostRadius) {
+      const angle = Math.atan2(this.playerState.z, this.playerState.x);
+      this.playerState.vx += Math.cos(angle) * 12 * delta;
+      this.playerState.vz += Math.sin(angle) * 12 * delta;
+      this.app.audio?.playSFX('dash');
+    }
+    // Arena bounds bounce
+    if (distToCenter > arenaRadius) {
+      const scale = arenaRadius / distToCenter;
+      this.playerState.x *= scale;
+      this.playerState.z *= scale;
+      this.playerState.vx *= -0.35;
+      this.playerState.vz *= -0.35;
+    }
     
     // Check collisions with bots
     if (this.practiceBots && this.practiceBots.length > 0) {
@@ -1481,8 +2080,9 @@ export class MinigameController {
 
     // Clamp to arena
     const dist = Math.sqrt(this.playerState.x ** 2 + this.playerState.z ** 2);
-    if (dist > 20) {
-      const scale = 20 / dist;
+    const radius = this.arenaRadius || 20;
+    if (dist > radius) {
+      const scale = radius / dist;
       this.playerState.x *= scale;
       this.playerState.z *= scale;
       // Bounce
@@ -1637,25 +2237,42 @@ export class MinigameController {
   // Coin Chaos minigame - 3D collectibles game
   updateCoinChaos(delta) {
     this.update3DPlayer(delta);
-    
-    // Coins already animated in animateCoins()
-    // Add bomb spawning every few seconds if they exist
+
+    // Spawn coins from spawners
+    if (!this.gameState.coinSpawnTimer) {
+      this.gameState.coinSpawnTimer = 0.9;
+    }
+    this.gameState.coinSpawnTimer -= delta;
+    if (this.gameState.coinSpawnTimer <= 0 && this.coinSpawners?.length) {
+      const source = this.coinSpawners[Math.floor(Math.random() * this.coinSpawners.length)];
+      const rare = Math.random() > 0.8;
+      this.gameState.coins.push({
+        id: 'drop_' + Date.now(),
+        x: source.x + (Math.random() - 0.5) * 1.5,
+        y: 1,
+        z: source.z + (Math.random() - 0.5) * 1.5,
+        collected: false,
+        value: rare ? 3 : 1
+      });
+      this.gameState.coinSpawnTimer = 0.6 + Math.random() * 0.4;
+    }
+
+    // Add bomb spawning every few seconds (practice visual)
     if (!this.gameState.bombSpawnTimer) {
-      this.gameState.bombSpawnTimer = 3;
+      this.gameState.bombSpawnTimer = 3.5;
     }
     
     this.gameState.bombSpawnTimer -= delta;
     if (this.gameState.bombSpawnTimer <= 0) {
-      // Spawn a bomb (just for visual effect in practice mode)
       if (this.isPractice && this.gameState.coins) {
-        // Add a special bomb coin
         const bombCoin = {
           id: 'bomb_' + Date.now(),
           x: (Math.random() - 0.5) * 30,
           y: 1,
           z: (Math.random() - 0.5) * 30,
           collected: false,
-          isBomb: true
+          isBomb: true,
+          value: -2
         };
         this.gameState.coins.push(bombCoin);
       }
@@ -1713,23 +2330,10 @@ export class MinigameController {
 
     // Platform collision
     this.playerState.onGround = false;
-    
-    // Create platforms if not exists
-    if (!this.platforms) {
-      this.platforms = [];
-      const count = 7;
-      for (let i = 0; i < count; i++) {
-        this.platforms.push({
-          x: (Math.random() - 0.5) * 25,
-          z: (Math.random() - 0.5) * 25,
-          y: i === 0 ? 0 : 2 + Math.random() * 6,
-          width: 4 + Math.random() * 3,
-          depth: 4 + Math.random() * 3,
-          shrinking: false,
-          shrinkAmount: 0,
-          shirkingSpeed: 0.3 + Math.random() * 0.2
-        });
-      }
+
+    // Ensure platforms exist (should be built in arena creation)
+    if (!this.platforms || this.platforms.length === 0) {
+      this.createPlatformPerilArena();
     }
     
     // Check platform collisions
@@ -1755,9 +2359,13 @@ export class MinigameController {
     // Shrink platforms over time
     this.platforms.forEach(platform => {
       if (platform.shrinking) {
-        platform.shrinkAmount += platform.shirkingSpeed * delta;
-        platform.width = Math.max(0.5, platform.width - platform.shirkingSpeed * delta);
-        platform.depth = Math.max(0.5, platform.depth - platform.shirkingSpeed * delta);
+        platform.shrinkAmount += platform.shrinkSpeed * delta;
+        platform.width = Math.max(0.6, platform.width - platform.shrinkSpeed * delta);
+        platform.depth = Math.max(0.6, platform.depth - platform.shrinkSpeed * delta);
+        if (platform.mesh) {
+          platform.mesh.scale.x = platform.width / platform.originalWidth;
+          platform.mesh.scale.z = platform.depth / platform.originalDepth;
+        }
       }
     });
 
@@ -1769,8 +2377,9 @@ export class MinigameController {
 
     // Arena bounds
     const dist = Math.sqrt(this.playerState.x ** 2 + this.playerState.z ** 2);
-    if (dist > 25) {
-      const scale = 25 / dist;
+    const radius = this.arenaRadius || 25;
+    if (dist > radius) {
+      const scale = radius / dist;
       this.playerState.x *= scale;
       this.playerState.z *= scale;
     }
@@ -1787,14 +2396,16 @@ export class MinigameController {
 
 
   updateUI() {
-    // Update timer
-    const timerEl = document.getElementById('minigame-timer');
+    const hud = this.getHUDRoot();
+
+    // Update timer (legacy element support)
+    const timerEl = document.getElementById('minigame-timer') || hud.querySelector('.hud-timer-value');
     if (timerEl && this.gameState?.timeLeft !== undefined) {
-      timerEl.textContent = Math.ceil(this.gameState.timeLeft);
+      timerEl.textContent = Math.max(0, Math.ceil(this.gameState.timeLeft));
     }
 
-    // Update scores display
-    const scoresEl = document.getElementById('minigame-scores');
+    // Scores
+    const scoresEl = document.getElementById('minigame-scores') || hud.querySelector('.hud-scores');
     if (scoresEl && this.gameState?.players) {
       scoresEl.innerHTML = this.gameState.players.map(player => `
         <div class="minigame-score-item">
@@ -1803,6 +2414,176 @@ export class MinigameController {
         </div>
       `).join('');
     }
+
+    // Per-minigame cues
+    this.renderMinigameHUD(hud, this.currentMinigame?.id);
+  }
+
+  getHUDRoot() {
+    let root = document.getElementById('minigame-hud');
+    if (!root) {
+      root = document.createElement('div');
+      root.id = 'minigame-hud';
+      root.className = 'minigame-hud';
+      document.getElementById('minigame-screen')?.appendChild(root);
+
+      // Create baseline blocks
+      const timerBlock = document.createElement('div');
+      timerBlock.className = 'hud-block hud-timer';
+      timerBlock.innerHTML = '<div class="hud-label">Time</div><div class="hud-timer-value">--</div>';
+      root.appendChild(timerBlock);
+
+      const scoreBlock = document.createElement('div');
+      scoreBlock.className = 'hud-block hud-scores';
+      root.appendChild(scoreBlock);
+
+      const detailBlock = document.createElement('div');
+      detailBlock.className = 'hud-block hud-detail';
+      root.appendChild(detailBlock);
+    }
+    return root;
+  }
+
+  renderMinigameHUD(root, minigameId) {
+    const detail = root.querySelector('.hud-detail');
+    if (!detail) return;
+
+    const hud = {
+      coin_chaos: () => {
+        const coinsLeft = this.gameState?.coins?.filter(c => !c.collected && !c.isBomb).length ?? 0;
+        const rareSoon = Math.max(0, (this.gameState?.coinSpawnTimer ?? 0)).toFixed(1);
+        const bombSoon = Math.max(0, (this.gameState?.bombSpawnTimer ?? 0)).toFixed(1);
+        detail.innerHTML = `
+          <div class="hud-row"><span>Coins active</span><strong>${coinsLeft}</strong></div>
+          <div class="hud-row"><span>Next drop</span><strong>${rareSoon}s</strong></div>
+          <div class="hud-row warning"><span>Bomb check</span><strong>${bombSoon}s</strong></div>
+        `;
+      },
+      hot_potato: () => {
+        const holder = this.gameState?.hotPotatoHolder || 'None';
+        const time = Math.max(0, Math.ceil(this.gameState?.bombTimer ?? 0));
+        detail.innerHTML = `
+          <div class="hud-row"><span>Holder</span><strong>${holder}</strong></div>
+          <div class="hud-row danger"><span>Detonation</span><strong>${time}s</strong></div>
+        `;
+      },
+      platform_peril: () => {
+        const active = this.platforms?.filter(p => p.width > 0.7 && p.depth > 0.7).length ?? 0;
+        const shrinking = this.platforms?.filter(p => p.shrinking).length ?? 0;
+        detail.innerHTML = `
+          <div class="hud-row"><span>Platforms safe</span><strong>${active}</strong></div>
+          <div class="hud-row warning"><span>Shrinking</span><strong>${shrinking}</strong></div>
+        `;
+      },
+      bumper_balls: () => {
+        const dist = Math.sqrt(this.playerState.x ** 2 + this.playerState.z ** 2);
+        const boostReady = dist < 3.2 ? 'BOOST!' : 'Center pad';
+        detail.innerHTML = `
+          <div class="hud-row ${dist < 3.2 ? 'success' : ''}"><span>Pad</span><strong>${boostReady}</strong></div>
+        `;
+      },
+      maze_race: () => {
+        const goal = this.gameState?.goal;
+        if (!goal) {
+          detail.innerHTML = '<div class="hud-row"><span>Goal</span><strong>Scanning...</strong></div>';
+          return;
+        }
+        const dx = goal.x - this.playerState.x;
+        const dz = goal.z - this.playerState.z;
+        const angle = Math.atan2(dz, dx);
+        const dir = this.directionArrow(angle);
+        const dist = Math.sqrt(dx * dx + dz * dz).toFixed(1);
+        detail.innerHTML = `
+          <div class="hud-row"><span>Direction</span><strong>${dir}</strong></div>
+          <div class="hud-row"><span>Distance</span><strong>${dist}m</strong></div>
+        `;
+      },
+      ice_skating: () => {
+        const remaining = this.gameState?.collectibles?.filter(c => !c.collected).length ?? 0;
+        detail.innerHTML = `
+          <div class="hud-row"><span>Crystals</span><strong>${remaining}</strong></div>
+        `;
+      }
+    };
+
+    const renderer = hud[minigameId];
+    if (renderer) {
+      renderer();
+    } else {
+      detail.innerHTML = '';
+    }
+  }
+
+  directionArrow(angleRad) {
+    const dirs = ['→', '↗', '↑', '↖', '←', '↙', '↓', '↘'];
+    const idx = Math.round((((angleRad + Math.PI) / (Math.PI * 2)) * 8)) % 8;
+    return dirs[idx];
+  }
+
+  getInputAxes() {
+    let moveX = 0;
+    let moveZ = 0;
+
+    if (this.activeActions.moveLeft) moveX -= 1;
+    if (this.activeActions.moveRight) moveX += 1;
+    if (this.activeActions.moveUp) moveZ -= 1;
+    if (this.activeActions.moveDown) moveZ += 1;
+
+    // Normalize keyboard input
+    const mag = Math.hypot(moveX, moveZ);
+    if (mag > 1e-3) {
+      moveX /= mag;
+      moveZ /= mag;
+    }
+
+    // Gamepad contribution (already normalized in pollGamepads)
+    if (this.gamepad.axes) {
+      moveX += this.gamepad.axes.x;
+      moveZ += this.gamepad.axes.y;
+    }
+
+    // Re-normalize after combining
+    const combinedMag = Math.hypot(moveX, moveZ);
+    if (combinedMag > 1) {
+      moveX /= combinedMag;
+      moveZ /= combinedMag;
+    }
+
+    const jumpPressed = this.activeActions.jump || this.gamepad.jump;
+
+    return { moveX, moveZ, jumpPressed };
+  }
+
+  pollGamepads() {
+    if (typeof navigator === 'undefined' || !navigator.getGamepads) return;
+    const pads = navigator.getGamepads();
+    const pad = pads?.find(p => p && p.connected);
+    if (!pad) {
+      this.gamepad.axes = null;
+      this.gamepad.jump = false;
+      this.gamepad.action = false;
+      return;
+    }
+
+    const dz = this.gamepad.deadzone;
+    const ax = pad.axes?.[0] || 0;
+    const ay = pad.axes?.[1] || 0;
+    const filteredX = Math.abs(ax) > dz ? ax : 0;
+    const filteredY = Math.abs(ay) > dz ? ay : 0;
+    this.gamepad.axes = { x: filteredX, y: filteredY };
+
+    const buttons = pad.buttons || [];
+    const pressed = (idx) => buttons[idx]?.pressed;
+    const jumpBtn = pressed(0) || pressed(1) || pressed(2) || pressed(3); // Face buttons
+    const actionBtn = pressed(5) || pressed(7) || pressed(0);
+
+    this.gamepad.jump = !!jumpBtn;
+    this.gamepad.action = !!actionBtn;
+
+    if (this.gamepad.action && !this.gamepad.lastAction) {
+      this.handleAction();
+    }
+    this.gamepad.lastAction = this.gamepad.action;
   }
 
   resizeCanvas() {
@@ -1840,12 +2621,13 @@ export class MinigameController {
         const botCount = 2 + Math.floor(Math.random() * 2); // 2-3 bots
         this.practiceBots = [];
         const botNames = ['Bot-1', 'Bot-2', 'Bot-3', 'Bot-4'];
-        const botColors = [0x00cec9, 0xfd79a8, 0xfdcb6e];
+        const botCharacters = ['jojo', 'mimi'];
         
         for (let i = 0; i < botCount; i++) {
           const bot = {
             id: `bot_${i}`,
             username: botNames[i],
+            characterId: botCharacters[i % botCharacters.length],
             x: (Math.random() - 0.5) * 20,
             y: 0,
             z: (Math.random() - 0.5) * 20,
@@ -2086,26 +2868,104 @@ export class MinigameController {
 
   // Update bot AI in practice mode
   updatePracticeBots(delta) {
+    const minigameId = this.currentMinigame?.id;
+
     this.practiceBots.forEach(bot => {
       if (!bot.alive) return;
 
-      // Simple AI - move towards random targets
-      bot.ai.changeTimer -= delta;
-      if (bot.ai.changeTimer <= 0) {
-        bot.ai.targetX = (Math.random() - 0.5) * 30;
-        bot.ai.targetZ = (Math.random() - 0.5) * 30;
-        bot.ai.changeTimer = 2 + Math.random() * 3;
+      if (!bot.ai) {
+        bot.ai = { targetX: bot.x, targetZ: bot.z, changeTimer: 1.5, difficulty: 'normal' };
       }
 
-      // Move towards target
+      const speed = 6 * delta;
+
+      // Decide goal per minigame
+      if (minigameId === 'coin_chaos' && this.gameState?.coins) {
+        const available = this.gameState.coins.filter(c => !c.collected && !c.isBomb);
+        if (available.length > 0) {
+          // Prefer high-value and nearby coins
+          const target = available.reduce((best, coin) => {
+            const d = Math.hypot(bot.x - coin.x, bot.z - coin.z);
+            const score = (coin.value || 1) / Math.max(1, d);
+            return !best || score > best.score ? { coin, score } : best;
+          }, null);
+          if (target) {
+            bot.ai.targetX = target.coin.x;
+            bot.ai.targetZ = target.coin.z;
+          }
+        }
+        // Steer away from bombs if close
+        const bomb = this.gameState.coins.find(c => c.isBomb && !c.collected);
+        if (bomb) {
+          const bd = Math.hypot(bot.x - bomb.x, bot.z - bomb.z);
+          if (bd < 5) {
+            bot.ai.targetX = bot.x + (bot.x - bomb.x) * 0.6;
+            bot.ai.targetZ = bot.z + (bot.z - bomb.z) * 0.6;
+          }
+        }
+      } else if (minigameId === 'maze_race' && this.gameState?.goal) {
+        bot.ai.targetX = this.gameState.goal.x;
+        bot.ai.targetZ = this.gameState.goal.z;
+      } else if (minigameId === 'bumper_balls') {
+        // Circle near the player but avoid rails
+        const towardsPlayer = { x: this.playerState.x * 0.7, z: this.playerState.z * 0.7 };
+        bot.ai.targetX = towardsPlayer.x + (Math.random() - 0.5) * 4;
+        bot.ai.targetZ = towardsPlayer.z + (Math.random() - 0.5) * 4;
+      } else if (minigameId === 'hot_potato') {
+        if (this.gameState.hotPotatoHolder === bot.id) {
+          // Kite away from player when holding bomb
+          const awayX = bot.x + (bot.x - this.playerState.x) * 0.8;
+          const awayZ = bot.z + (bot.z - this.playerState.z) * 0.8;
+          bot.ai.targetX = awayX;
+          bot.ai.targetZ = awayZ;
+        } else {
+          bot.ai.targetX = (Math.random() - 0.5) * 25;
+          bot.ai.targetZ = (Math.random() - 0.5) * 25;
+        }
+      } else if (minigameId === 'platform_peril' && this.platforms?.length) {
+        const candidates = this.platforms.filter(p => p.width > 0.8 && p.depth > 0.8);
+        const safe = candidates.reduce((best, p) => {
+          const d = Math.hypot(bot.x - p.x, bot.z - p.z);
+          return !best || d < best.dist ? { p, dist: d } : best;
+        }, null);
+        if (safe?.p) {
+          bot.ai.targetX = safe.p.x;
+          bot.ai.targetZ = safe.p.z;
+        }
+      } else {
+        bot.ai.changeTimer -= delta;
+        if (bot.ai.changeTimer <= 0) {
+          bot.ai.targetX = (Math.random() - 0.5) * 30;
+          bot.ai.targetZ = (Math.random() - 0.5) * 30;
+          bot.ai.changeTimer = 2 + Math.random() * 3;
+        }
+      }
+
+      // Move towards target with simple acceleration
       const dx = bot.ai.targetX - bot.x;
       const dz = bot.ai.targetZ - bot.z;
       const dist = Math.sqrt(dx * dx + dz * dz);
       
-      if (dist > 0.5) {
-        const speed = 5 * delta;
-        bot.x += (dx / dist) * speed;
-        bot.z += (dz / dist) * speed;
+      if (dist > 0.1) {
+        bot.vx += (dx / dist) * speed;
+        bot.vz += (dz / dist) * speed;
+      }
+
+      bot.vx *= 0.9;
+      bot.vz *= 0.9;
+
+      bot.x += bot.vx * delta;
+      bot.z += bot.vz * delta;
+
+      // Keep bots within arena bounds
+      const radius = this.arenaRadius || 20;
+      const botDist = Math.sqrt(bot.x ** 2 + bot.z ** 2);
+      if (botDist > radius) {
+        const scale = radius / botDist;
+        bot.x *= scale;
+        bot.z *= scale;
+        bot.vx *= -0.25;
+        bot.vz *= -0.25;
       }
 
       // Update mesh position
@@ -2124,7 +2984,7 @@ export class MinigameController {
           const cdist = Math.sqrt(cdx * cdx + cdz * cdz);
           if (cdist < 2) {
             coin.collected = true;
-            bot.score++;
+            bot.score += coin.value || 1;
           }
         });
       }

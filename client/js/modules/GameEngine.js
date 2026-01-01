@@ -24,6 +24,7 @@ export class GameEngine {
     this.players = [];
     this.currentPlayer = null;
     this.boardData = null;
+    this.boardTheme = null;
     this.spaces = [];
     this.playerMeshes = new Map();
     
@@ -49,6 +50,7 @@ export class GameEngine {
     this.gameState = data.gameState || data.game;
     this.players = data.players || this.gameState?.players;
     this.boardData = data.board || this.gameState?.board;
+    this.boardTheme = this.getBoardTheme(this.gameState?.boardId || this.boardData?.id);
     this.showedBoardIntro = false;
     
     this.initThreeJS();
@@ -176,6 +178,108 @@ export class GameEngine {
       'sky_kingdom': 'Use the wind to your advantage - it can help or hurt!'
     };
     return tips[boardId] || 'Explore the board and discover its secrets!';
+  }
+
+  getBoardTheme(boardId) {
+    const baseTheme = {
+      id: boardId || 'default',
+      background: 0x1a1a2e,
+      fogColor: 0x1a1a2e,
+      fogNear: 50,
+      fogFar: 200,
+      ambientColor: 0x6C5CE7,
+      ambientIntensity: 0.5,
+      keyLightColor: 0xffffff,
+      keyLightIntensity: 1,
+      fillLightColor: 0x00CEC9,
+      fillLightIntensity: 0.3,
+      accentColor: 0xFDCB6E,
+      boardColor: 0x16213E,
+      rimColor: 0x23395D,
+      pathColor: 0x444466,
+      spaceTint: null,
+      spaceTintStrength: 0.22,
+      particleHue: [0.55, 0.8],
+      boardRadius: 40
+    };
+
+    const themes = {
+      tropical_paradise: {
+        background: 0x9be8ff,
+        fogColor: 0x7cc7ff,
+        fogNear: 40,
+        fogFar: 150,
+        ambientColor: 0xfff3a5,
+        ambientIntensity: 0.65,
+        keyLightColor: 0xffffff,
+        keyLightIntensity: 1.1,
+        fillLightColor: 0x4bcfa3,
+        fillLightIntensity: 0.45,
+        accentColor: 0xffe28a,
+        boardColor: 0x1f8a5b,
+        rimColor: 0xf5d46c,
+        pathColor: 0x2c9b73,
+        spaceTint: 0x2c9b73,
+        particleHue: [0.44, 0.56]
+      },
+      crystal_caves: {
+        background: 0x0b1024,
+        fogColor: 0x141d3b,
+        fogNear: 35,
+        fogFar: 130,
+        ambientColor: 0x75d1ff,
+        ambientIntensity: 0.45,
+        keyLightColor: 0xa3e4ff,
+        keyLightIntensity: 1.25,
+        fillLightColor: 0x7a5cff,
+        fillLightIntensity: 0.5,
+        accentColor: 0x7df0ff,
+        boardColor: 0x10223d,
+        rimColor: 0x52b6ff,
+        pathColor: 0x4fa3ff,
+        spaceTint: 0x7df0ff,
+        particleHue: [0.55, 0.68]
+      },
+      haunted_manor: {
+        background: 0x0b0b10,
+        fogColor: 0x0f1020,
+        fogNear: 30,
+        fogFar: 120,
+        ambientColor: 0x6c5ce7,
+        ambientIntensity: 0.4,
+        keyLightColor: 0xfff3c0,
+        keyLightIntensity: 0.9,
+        fillLightColor: 0x2f365f,
+        fillLightIntensity: 0.35,
+        accentColor: 0xff8b5f,
+        boardColor: 0x1c1d2d,
+        rimColor: 0x352f5f,
+        pathColor: 0x4a3f7a,
+        spaceTint: 0xa45bb3,
+        particleHue: [0.68, 0.78]
+      },
+      sky_kingdom: {
+        background: 0xcde8ff,
+        fogColor: 0xb6dcff,
+        fogNear: 60,
+        fogFar: 200,
+        ambientColor: 0xffffff,
+        ambientIntensity: 0.7,
+        keyLightColor: 0xfff1c4,
+        keyLightIntensity: 1.05,
+        fillLightColor: 0x8cc8ff,
+        fillLightIntensity: 0.45,
+        accentColor: 0xffc768,
+        boardColor: 0x83b2ff,
+        rimColor: 0xffe59a,
+        pathColor: 0xffc064,
+        spaceTint: 0xffc064,
+        particleHue: [0.52, 0.6]
+      }
+    };
+
+    const theme = themes[boardId] || {};
+    return { ...baseTheme, ...theme };
   }
 
   playBoardTour() {
@@ -339,9 +443,10 @@ export class GameEngine {
     this.textureLoader = new THREE.TextureLoader();
 
     // Scene
+    const theme = this.boardTheme || this.getBoardTheme(this.boardData?.id);
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x1a1a2e);
-    this.scene.fog = new THREE.Fog(0x1a1a2e, 50, 200);
+    this.scene.background = new THREE.Color(theme.background);
+    this.scene.fog = new THREE.Fog(theme.fogColor, theme.fogNear, theme.fogFar);
 
     // Camera
     this.camera = new THREE.PerspectiveCamera(
@@ -364,7 +469,7 @@ export class GameEngine {
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
     // Lighting
-    this.setupLighting();
+    this.setupLighting(theme);
 
     // Clock for animations
     this.clock = new THREE.Clock();
@@ -373,13 +478,15 @@ export class GameEngine {
     window.addEventListener('resize', () => this.handleResize());
   }
 
-  setupLighting() {
+  setupLighting(theme) {
+    const useTheme = theme || this.getBoardTheme(this.boardData?.id);
+
     // Ambient light
-    const ambient = new THREE.AmbientLight(0x6C5CE7, 0.5);
+    const ambient = new THREE.AmbientLight(useTheme.ambientColor, useTheme.ambientIntensity);
     this.scene.add(ambient);
 
     // Main directional light (sun)
-    const sun = new THREE.DirectionalLight(0xffffff, 1);
+    const sun = new THREE.DirectionalLight(useTheme.keyLightColor, useTheme.keyLightIntensity);
     sun.position.set(30, 50, 30);
     sun.castShadow = true;
     sun.shadow.mapSize.width = this.quality === 'high' ? 2048 : 1024;
@@ -393,12 +500,12 @@ export class GameEngine {
     this.scene.add(sun);
 
     // Secondary light for fill
-    const fill = new THREE.DirectionalLight(0x00CEC9, 0.3);
+    const fill = new THREE.DirectionalLight(useTheme.fillLightColor, useTheme.fillLightIntensity);
     fill.position.set(-20, 20, -20);
     this.scene.add(fill);
 
     // Point lights for board highlights
-    const boardLight = new THREE.PointLight(0xFDCB6E, 0.5, 50);
+    const boardLight = new THREE.PointLight(useTheme.accentColor, 0.5, 50);
     boardLight.position.set(0, 10, 0);
     this.scene.add(boardLight);
   }
@@ -406,17 +513,35 @@ export class GameEngine {
   createBoard() {
     if (!this.boardData) return;
 
+    const theme = this.boardTheme || this.getBoardTheme(this.boardData?.id);
+    const radius = theme.boardRadius || 40;
+
     // Create board base
-    const boardGeometry = new THREE.CircleGeometry(40, 64);
+    const boardGeometry = new THREE.CircleGeometry(radius, 72);
     const boardMaterial = new THREE.MeshStandardMaterial({
-      color: 0x16213E,
-      roughness: 0.8,
-      metalness: 0.2
+      color: theme.boardColor,
+      roughness: 0.7,
+      metalness: 0.25,
+      emissive: new THREE.Color(theme.boardColor).multiplyScalar(0.08)
     });
     const boardMesh = new THREE.Mesh(boardGeometry, boardMaterial);
     boardMesh.rotation.x = -Math.PI / 2;
     boardMesh.receiveShadow = true;
     this.scene.add(boardMesh);
+
+    // Add subtle rim/border
+    const rimGeometry = new THREE.RingGeometry(radius - 0.5, radius + 1.4, 72);
+    const rimMaterial = new THREE.MeshStandardMaterial({
+      color: theme.rimColor,
+      roughness: 0.4,
+      metalness: 0.45,
+      side: THREE.DoubleSide
+    });
+    const rimMesh = new THREE.Mesh(rimGeometry, rimMaterial);
+    rimMesh.rotation.x = -Math.PI / 2;
+    rimMesh.position.y = 0.02;
+    rimMesh.receiveShadow = true;
+    this.scene.add(rimMesh);
 
     // Create spaces
     this.boardData.spaces?.forEach((space, index) => {
@@ -426,13 +551,14 @@ export class GameEngine {
     });
 
     // Create paths between spaces
-    this.createPaths();
+    this.createPaths(theme);
 
     // Add decorative elements
-    this.addBoardDecorations();
+    this.addBoardDecorations(theme, radius);
   }
 
   createSpace(space, index) {
+    const theme = this.boardTheme || this.getBoardTheme(this.boardData?.id);
     const colors = {
       BLUE: 0x4A90D9,
       RED: 0xE74C3C,
@@ -444,7 +570,8 @@ export class GameEngine {
       START: 0x00B894
     };
 
-    const color = colors[space.type] || 0x808080;
+    const baseColor = colors[space.type] || 0x808080;
+    const color = this.applySpaceTint(baseColor, theme);
     
     // Create hexagonal space
     const geometry = new THREE.CylinderGeometry(1.5, 1.5, 0.3, 6);
@@ -453,7 +580,7 @@ export class GameEngine {
       roughness: 0.6,
       metalness: 0.3,
       emissive: color,
-      emissiveIntensity: 0.2
+      emissiveIntensity: 0.25
     });
     
     const mesh = new THREE.Mesh(geometry, material);
@@ -531,12 +658,16 @@ export class GameEngine {
     parentMesh.add(sprite);
   }
 
-  createPaths() {
+  createPaths(theme) {
     if (!this.boardData.spaces) return;
 
+    const useTheme = theme || this.boardTheme || this.getBoardTheme(this.boardData?.id);
+
     const material = new THREE.MeshStandardMaterial({
-      color: 0x444466,
-      roughness: 0.8
+      color: useTheme.pathColor,
+      roughness: 0.7,
+      metalness: 0.2,
+      emissive: new THREE.Color(useTheme.pathColor).multiplyScalar(0.15)
     });
 
     this.boardData.spaces.forEach((space, index) => {
@@ -561,16 +692,41 @@ export class GameEngine {
     });
   }
 
-  addBoardDecorations() {
-    // Add some floating particles/decorations around the board (use pool if possible)
-    if (!this.particlesEnabled) return;
+  addBoardDecorations(theme, radius = 40) {
+    const useTheme = theme || this.boardTheme || this.getBoardTheme(this.boardData?.id);
+    const boardRadius = radius || useTheme.boardRadius || 40;
 
-    const particleCount = this.quality === 'high' ? 100 : 50;
+    this.addThemedEnvironment(useTheme, boardRadius);
+    if (this.particlesEnabled) {
+      this.addAmbientParticles(useTheme);
+    }
+  }
+
+  addThemedEnvironment(theme, radius) {
+    switch (theme.id) {
+      case 'tropical_paradise':
+        this.addTropicalDetails(theme, radius);
+        break;
+      case 'crystal_caves':
+        this.addCrystalDetails(theme, radius);
+        break;
+      case 'haunted_manor':
+        this.addHauntedDetails(theme, radius);
+        break;
+      case 'sky_kingdom':
+        this.addSkyDetails(theme, radius);
+        break;
+      default:
+        break;
+    }
+  }
+
+  addAmbientParticles(theme) {
+    const particleCount = this.quality === 'high' ? 120 : 70;
 
     // Try to reuse a pooled particle system first
     let particles = this.particlePool.acquire('particles');
     if (particles) {
-      // Reconfigure if needed
       this.scene.add(particles);
       this.particles.push(particles);
       return;
@@ -586,7 +742,9 @@ export class GameEngine {
       positions[i * 3 + 2] = (Math.random() - 0.5) * 80;
 
       const color = new THREE.Color();
-      color.setHSL(Math.random() * 0.3 + 0.5, 0.7, 0.6);
+      const hueRange = theme?.particleHue || [0.55, 0.8];
+      const hue = Math.random() * (hueRange[1] - hueRange[0]) + hueRange[0];
+      color.setHSL(hue, 0.65, 0.62);
       colors[i * 3] = color.r;
       colors[i * 3 + 1] = color.g;
       colors[i * 3 + 2] = color.b;
@@ -606,6 +764,230 @@ export class GameEngine {
     particles.userData.isParticle = true;
     this.scene.add(particles);
     this.particles.push(particles);
+  }
+
+  addTropicalDetails(theme, radius) {
+    // Water ring
+    const waterGeometry = new THREE.CircleGeometry(radius + 6, 48);
+    const waterMaterial = new THREE.MeshStandardMaterial({
+      color: 0x63d3ff,
+      roughness: 0.25,
+      metalness: 0.05,
+      transparent: true,
+      opacity: 0.82
+    });
+    const water = new THREE.Mesh(waterGeometry, waterMaterial);
+    water.rotation.x = -Math.PI / 2;
+    water.position.y = -0.05;
+    water.receiveShadow = false;
+    this.scene.add(water);
+
+    // Palm clusters around the perimeter
+    const clusters = 6;
+    for (let i = 0; i < clusters; i++) {
+      const angle = (i / clusters) * Math.PI * 2 + Math.random() * 0.4;
+      const dist = radius - 4 + Math.random() * 2;
+      const x = Math.cos(angle) * dist;
+      const z = Math.sin(angle) * dist;
+      const palm = this.createPalmCluster(x, z);
+      this.scene.add(palm);
+    }
+
+    // Beach lights
+    const light = new THREE.PointLight(theme.accentColor, 0.5, 25);
+    light.position.set(0, 6, 0);
+    this.scene.add(light);
+  }
+
+  addCrystalDetails(theme, radius) {
+    // Ground glow ring
+    const glowGeometry = new THREE.RingGeometry(radius - 5, radius + 2, 64);
+    const glowMaterial = new THREE.MeshBasicMaterial({
+      color: theme.accentColor,
+      transparent: true,
+      opacity: 0.25,
+      side: THREE.DoubleSide
+    });
+    const glow = new THREE.Mesh(glowGeometry, glowMaterial);
+    glow.rotation.x = -Math.PI / 2;
+    glow.position.y = 0.02;
+    this.scene.add(glow);
+
+    // Crystal clusters
+    const clusters = 8;
+    for (let i = 0; i < clusters; i++) {
+      const angle = (i / clusters) * Math.PI * 2 + Math.random() * 0.3;
+      const dist = radius - 6 + Math.random() * 3;
+      const x = Math.cos(angle) * dist;
+      const z = Math.sin(angle) * dist;
+      const crystal = this.createCrystalCluster(x, z, theme.accentColor);
+      this.scene.add(crystal);
+    }
+
+    const pointLight = new THREE.PointLight(theme.accentColor, 0.6, 28);
+    pointLight.position.set(0, 7, 0);
+    this.scene.add(pointLight);
+  }
+
+  addHauntedDetails(theme, radius) {
+    // Subtle ground fog
+    const fogGeometry = new THREE.CircleGeometry(radius + 5, 48);
+    const fogMaterial = new THREE.MeshBasicMaterial({
+      color: theme.fogColor,
+      transparent: true,
+      opacity: 0.12
+    });
+    const fog = new THREE.Mesh(fogGeometry, fogMaterial);
+    fog.rotation.x = -Math.PI / 2;
+    fog.position.y = 0.03;
+    this.scene.add(fog);
+
+    // Lanterns and graves
+    const features = 7;
+    for (let i = 0; i < features; i++) {
+      const angle = (i / features) * Math.PI * 2 + Math.random() * 0.35;
+      const dist = radius - 5 + Math.random() * 2;
+      const x = Math.cos(angle) * dist;
+      const z = Math.sin(angle) * dist;
+      const grave = this.createGraveMarker(x, z, theme.accentColor);
+      this.scene.add(grave);
+    }
+
+    const ghostLight = new THREE.PointLight(theme.accentColor, 0.5, 22);
+    ghostLight.position.set(0, 5.5, 0);
+    this.scene.add(ghostLight);
+  }
+
+  addSkyDetails(theme, radius) {
+    // Floating ring
+    const ringGeometry = new THREE.TorusGeometry(radius - 8, 0.35, 12, 48);
+    const ringMaterial = new THREE.MeshStandardMaterial({
+      color: theme.accentColor,
+      emissive: new THREE.Color(theme.accentColor).multiplyScalar(0.3),
+      roughness: 0.3,
+      metalness: 0.4
+    });
+    const ring = new THREE.Mesh(ringGeometry, ringMaterial);
+    ring.position.y = 0.5;
+    this.scene.add(ring);
+
+    // Clouds
+    const clouds = 6;
+    for (let i = 0; i < clouds; i++) {
+      const angle = (i / clouds) * Math.PI * 2 + Math.random() * 0.5;
+      const dist = radius - 7 + Math.random() * 3;
+      const x = Math.cos(angle) * dist;
+      const z = Math.sin(angle) * dist;
+      const cloud = this.createCloud(x, z);
+      this.scene.add(cloud);
+    }
+
+    const skyLight = new THREE.PointLight(theme.accentColor, 0.55, 26);
+    skyLight.position.set(0, 8, 0);
+    this.scene.add(skyLight);
+  }
+
+  createPalmCluster(x, z) {
+    const group = new THREE.Group();
+    group.position.set(x, 0, z);
+
+    const trunk = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.3, 0.5, 4, 6),
+      new THREE.MeshStandardMaterial({ color: 0x8b5a2b, roughness: 0.7 })
+    );
+    trunk.position.y = 2;
+    trunk.castShadow = true;
+    trunk.receiveShadow = true;
+    group.add(trunk);
+
+    for (let i = 0; i < 5; i++) {
+      const leaf = new THREE.Mesh(
+        new THREE.ConeGeometry(1.6, 2.5, 6),
+        new THREE.MeshStandardMaterial({ color: 0x2ecc71, roughness: 0.45 })
+      );
+      leaf.position.set(0, 4, 0);
+      leaf.rotation.z = Math.PI / 4;
+      leaf.rotation.y = (i / 5) * Math.PI * 2;
+      leaf.castShadow = true;
+      group.add(leaf);
+    }
+
+    return group;
+  }
+
+  createCrystalCluster(x, z, accentColor) {
+    const group = new THREE.Group();
+    group.position.set(x, 0, z);
+
+    const shardCount = 4;
+    for (let i = 0; i < shardCount; i++) {
+      const height = 2 + Math.random() * 2;
+      const shard = new THREE.Mesh(
+        new THREE.ConeGeometry(0.6 + Math.random() * 0.4, height, 6),
+        new THREE.MeshStandardMaterial({
+          color: accentColor,
+          emissive: new THREE.Color(accentColor).multiplyScalar(0.4),
+          roughness: 0.2,
+          metalness: 0.1
+        })
+      );
+      shard.position.set((Math.random() - 0.5) * 1.5, height / 2, (Math.random() - 0.5) * 1.5);
+      shard.rotation.y = Math.random() * Math.PI;
+      shard.castShadow = true;
+      group.add(shard);
+    }
+
+    return group;
+  }
+
+  createGraveMarker(x, z, accentColor) {
+    const group = new THREE.Group();
+    group.position.set(x, 0, z);
+
+    const stone = new THREE.Mesh(
+      new THREE.BoxGeometry(1.1, 1.4, 0.4),
+      new THREE.MeshStandardMaterial({ color: 0x3b3b4f, roughness: 0.8 })
+    );
+    stone.position.y = 0.7;
+    stone.castShadow = true;
+    stone.receiveShadow = true;
+    group.add(stone);
+
+    const light = new THREE.PointLight(accentColor, 0.35, 8);
+    light.position.set(0, 1.5, 0);
+    group.add(light);
+
+    return group;
+  }
+
+  createCloud(x, z) {
+    const group = new THREE.Group();
+    group.position.set(x, 3.5, z);
+
+    const puff = (dx, dy, dz, scale) => {
+      const mesh = new THREE.Mesh(
+        new THREE.SphereGeometry(scale, 12, 12),
+        new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5, metalness: 0 })
+      );
+      mesh.position.set(dx, dy, dz);
+      mesh.castShadow = true;
+      group.add(mesh);
+    };
+
+    puff(0, 0, 0, 1.5);
+    puff(1, 0.3, 0.6, 1.2);
+    puff(-1, 0.2, -0.5, 1);
+    puff(0.7, -0.1, -0.6, 0.8);
+
+    return group;
+  }
+
+  applySpaceTint(colorHex, theme) {
+    if (!theme || !theme.spaceTint) return colorHex;
+    const base = new THREE.Color(colorHex);
+    const tint = new THREE.Color(theme.spaceTint);
+    base.lerp(tint, theme.spaceTintStrength ?? 0.2);
+    return base.getHex();
   }
 
   createPlayers() {

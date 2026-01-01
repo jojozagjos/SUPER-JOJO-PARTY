@@ -82,7 +82,16 @@ export class AudioManager {
       shopRare: { frequency: 600, duration: 0.25, type: 'sine', sequence: [600, 800, 1000, 1200, 1400] },
       shopLucky: { frequency: 700, duration: 0.2, type: 'triangle', sequence: [700, 880, 1046.5] },
       turnStart: { frequency: 440, duration: 0.15, type: 'sine', sequence: [440, 523.25] },
-      gameEnd: { frequency: 523.25, duration: 0.6, type: 'sine', sequence: [523.25, 659.25, 783.99, 1046.5, 1318.5, 1568] }
+      gameEnd: { frequency: 523.25, duration: 0.6, type: 'sine', sequence: [523.25, 659.25, 783.99, 1046.5, 1318.5, 1568] },
+      bump: { frequency: 220, duration: 0.15, type: 'square', sequence: [220, 330, 260] },
+      dash: { frequency: 880, duration: 0.12, type: 'square', sequence: [880, 660] },
+      hazard: { frequency: 180, duration: 0.35, type: 'sawtooth', sequence: [180, 150, 120] },
+      rareCoin: { frequency: 1400, duration: 0.18, type: 'triangle', sequence: [1400, 1600, 1800] },
+      potatoPass: { frequency: 640, duration: 0.2, type: 'square', sequence: [640, 760, 900] },
+      potatoBoom: { frequency: 120, duration: 0.5, type: 'sawtooth', sequence: [240, 180, 120, 80] },
+      pass: { frequency: 520, duration: 0.12, type: 'sine', sequence: [520, 640] },
+      win: { frequency: 880, duration: 0.35, type: 'sine', sequence: [660, 880, 990] },
+      go: { frequency: 880, duration: 0.3, type: 'triangle', sequence: [660, 880, 1046.5] }
     };
     
     this.init();

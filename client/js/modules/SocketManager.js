@@ -428,12 +428,12 @@ export class SocketManager {
   emit(eventName, data, callback) {
     if (this.socket && this.connected) {
       return this.socket.emit(eventName, data, callback);
-    } else {
-      // Queue the emit for later
-      this.pendingEmits.push({ eventName, data, callback });
-      console.warn(`Queued emit: ${eventName} (not connected)`);
-      return null;
     }
+
+    // Queue the emit for later
+    this.pendingEmits.push({ eventName, data, callback });
+    console.warn(`Queued emit: ${eventName} (not connected)`);
+    return null;
   }
 
   flushPendingEmits() {
@@ -446,38 +446,18 @@ export class SocketManager {
     }
   }
 
-  isConnected() {
-    return this.connected && this.socket && this.socket.connected;
-  }
-      this.app.ui.showToast(data.message || 'An error occurred', 'error');
-    });
-  }
-
-  emit(event, data) {
-    if (!this.socket || !this.connected) {
-      console.warn('Cannot emit - not connected');
-      return false;
-    }
-    
-    this.socket.emit(event, data);
-    return true;
-  }
-
+  // Public helpers to manage socket handlers
   on(event, handler) {
-    if (this.socket) {
-      this.socket.on(event, handler);
-    }
+    if (this.socket) this.socket.on(event, handler);
     this.eventHandlers.set(event, handler);
   }
 
   off(event) {
-    if (this.socket) {
-      this.socket.off(event);
-    }
+    if (this.socket) this.socket.off(event);
     this.eventHandlers.delete(event);
   }
 
   isConnected() {
-    return this.connected;
+    return !!(this.socket && this.connected && this.socket.connected);
   }
 }

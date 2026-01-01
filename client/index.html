@@ -877,6 +877,27 @@
 
   <!-- Three.js -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script>
+    // Fallback loader: if Three.js is blocked by tracking protection or CDN fails,
+    // try loading a local copy at /js/libs/three.min.js (please add this file via npm or download).
+    (function() {
+      function loadLocalThree() {
+        var s = document.createElement('script');
+        s.src = '/js/libs/three.min.js';
+        s.onload = function() { console.info('Loaded local three.min.js fallback'); };
+        s.onerror = function() { console.error('Failed to load local three.min.js fallback. Please ensure /js/libs/three.min.js exists or install Three locally.'); };
+        document.head.appendChild(s);
+      }
+
+      // Small delay to allow CDN to load if allowed by browser. If THREE is not present, load local.
+      setTimeout(function() {
+        if (typeof THREE === 'undefined') {
+          console.warn('Three.js not available from CDN; attempting local fallback.');
+          loadLocalThree();
+        }
+      }, 500);
+    })();
+  </script>
   <!-- Socket.io -->
   <script src="/socket.io/socket.io.js"></script>
   <!-- Application Scripts -->
