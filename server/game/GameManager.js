@@ -1265,12 +1265,51 @@ export class GameManager {
     } else if (blueTeam.length === 1 || redTeam.length === 1) {
       minigameType = '1v3';
     }
+    // Select a minigame with Mario Party-like variety.
+    // - If it's a team round, pick a team minigame.
+    // - Otherwise, sometimes pick a coin minigame (only those marked category:'coin').
+    const playerCount = game.players.length;
 
-    // Select random minigame of appropriate type
-    const availableMinigames = MINIGAMES.filter(m => 
-      m.type === minigameType || m.type === 'ffa'
-    );
+    const isTeamRound = (minigameType === 'team' || minigameType === '1v3');
+    let desiredCategory = 'standard';
+
+    if (isTeamRound) {
+      desiredCategory = 'team';
+    } else {
+      // Weighted categories for FFA rounds
+      // (battle is treated as standard unless you add battle minigames later)
+      const roll = Math.random();
+      if (roll < 0.15) desiredCategory = 'coin';
+      else desiredCategory = 'standard';
+    }
+
+    const matchesPlayerCount = (m) => {
+      if (!m.playerCount) return true;
+      const [minP, maxP] = m.playerCount;
+      return playerCount >= minP && playerCount <= maxP;
+    };
+
+    const poolFor = (category) => MINIGAMES.filter(m => {
+      const cat = m.category || (m.type === 'team' ? 'team' : 'standard');
+      const typeOk = isTeamRound ? (m.type === minigameType || m.type === 'team') : (m.type === 'ffa');
+      return matchesPlayerCount(m) && typeOk && cat === category;
+    });
+
+    let availableMinigames = poolFor(desiredCategory);
+
+    // Fallbacks
+    if (availableMinigames.length === 0 && desiredCategory !== 'standard') {
+      availableMinigames = poolFor('standard');
+      desiredCategory = 'standard';
+    }
+    if (availableMinigames.length === 0) {
+      // Absolute fallback: any FFA minigame
+      availableMinigames = MINIGAMES.filter(m => matchesPlayerCount(m) && m.type === 'ffa');
+      desiredCategory = 'standard';
+    }
+
     const selectedMinigame = availableMinigames[Math.floor(Math.random() * availableMinigames.length)];
+
 
     game.currentMinigame = {
       id: selectedMinigame.id,
@@ -1286,6 +1325,8 @@ export class GameManager {
     this.io.to(game.lobbyId).emit('game:minigameSelected', {
       minigame: selectedMinigame,
       type: minigameType,
+      category: selectedMinigame.category || (selectedMinigame.type === 'team' ? 'team' : 'standard'),
+      awardsCoins: !!selectedMinigame.awardsCoins,
       teams: game.currentMinigame.teams
     });
   }
@@ -1343,7 +1384,18 @@ export class GameManager {
       mg.scores[playerId] = 0;
     }
 
-    if (input.score !== undefined) {
+    
+    // Optional: lightweight position replication so players can be seen in 3D minigames
+    if (input.pos) {
+      mg.positions = mg.positions || {};
+      mg.positions[playerId] = {
+        x: Number(input.pos.x) || 0,
+        y: Number(input.pos.y) || 0,
+        z: Number(input.pos.z) || 0
+      };
+    }
+
+if (input.score !== undefined) {
       mg.scores[playerId] = input.score;
     }
     if (input.addScore !== undefined) {
@@ -1354,7 +1406,9 @@ export class GameManager {
       mg.finishTimes[playerId] = Date.now() - mg.startTime;
     }
 
-    return { scores: mg.scores };
+    const payload = { scores: mg.scores };
+    if (input.pos) payload.pos = mg.positions?.[playerId];
+    return payload;
   }
 
   endMinigame(gameId) {
@@ -1381,11 +1435,12 @@ export class GameManager {
       }
 
       // Award coins to winner(s)
-      const reward = Math.floor(10 / results.winners.length);
+      const awardsCoins = !!mg.data?.awardsCoins;
+      const reward = awardsCoins ? Math.floor(10 / results.winners.length) : 0;
       for (const winnerId of results.winners) {
         const player = game.players.find(p => p.id === winnerId);
         if (player) {
-          player.coins += reward;
+          if (reward > 0) player.coins += reward;
           player.minigamesWon++;
           results.rewards[winnerId] = reward;
         }
@@ -1422,6 +1477,7 @@ export class GameManager {
 
     this.io.to(game.lobbyId).emit('game:minigameEnded', {
       results,
+      awardsCoins: !!mg.data?.awardsCoins,
       game: this.sanitizeGame(game)
     });
 

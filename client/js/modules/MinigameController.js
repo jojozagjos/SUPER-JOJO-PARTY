@@ -67,6 +67,12 @@ export class MinigameController {
     // 3D player mesh
     this.playerMesh = null;
     this.otherPlayerMeshes = new Map();
+    this.nameplates = new Map();
+    this.nameplatesRoot = null;
+    this.serverStartTime = 0;
+    this.lastPosEmit = 0;
+    this.netPosHz = 10; // position update rate for multiplayer minigames
+    this._lastArenaTheme = null;
     
     // Practice bots
     this.practiceBots = [];
@@ -569,6 +575,14 @@ export class MinigameController {
     // Create player mesh
     this.createPlayerMesh();
 
+    // Spawn other players for multiplayer rendering (lightweight)
+    this.createOtherPlayerMeshesFromLobby();
+
+    // Nameplate root for username labels
+    this.ensureNameplatesRoot();
+    this.ensureNameplateForPlayer('local');
+    this.otherPlayerMeshes.forEach((_, id) => this.ensureNameplateForPlayer(id));
+
     // Clock for animations
     this.clock = new THREE.Clock();
   }
@@ -708,6 +722,7 @@ export class MinigameController {
     };
 
     const theme = themes[minigameId] || themes.default;
+    this._lastArenaTheme = theme;
 
     this.arenaRadius = theme.radius ?? 18;
     this.applyArenaTheme(theme);
@@ -1403,26 +1418,70 @@ export class MinigameController {
   }
 
   onStarted(data) {
-    this.isPlaying = true;
-    this.gameState = data.state;
-    
-    // Initialize player position
+    // Server emits: { minigame, startTime }
+    // Do not start gameplay immediately. Gate behind cinematic intro + countdown.
+    this.isPlaying = false;
+    this.cinematicPlaying = true;
+
+    // Keep server timing for synced countdowns / results
+    this.serverStartTime = data?.startTime || Date.now();
+
+    // Ensure we have a minigame object to work with
+    if (data?.minigame) {
+      this.currentMinigame = data.minigame;
+    }
+
+    // Reset player state for 3D
     if (this.is3D) {
       this.playerState.x = 0;
       this.playerState.y = 0;
       this.playerState.z = 0;
+      this.playerState.vy = 0;
+      this.playerState.onGround = true;
     } else if (this.canvas) {
       this.playerState.x = this.canvas.width / 2;
       this.playerState.y = this.canvas.height / 2;
     }
-    
+
+    // Start the loop so the cutscene can animate
     this.startGameLoop();
+
+    // Play cinematic intro (camera shots + overlay + countdown)
+    this.playCinematic(this.currentMinigame);
   }
 
+
   onState(data) {
-    this.gameState = data;
+    // Server emits: { playerId, update }
+    if (!data) return;
+
+    // Backward compatibility if a full state is sent
+    if (data.players || data.coins || data.hazards) {
+      this.gameState = data;
+      this.updateUI();
+      return;
+    }
+
+    const { playerId, update } = data;
+
+    if (!this.gameState) this.gameState = {};
+    if (!this.gameState.scores) this.gameState.scores = {};
+
+    if (update?.scores) {
+      this.gameState.scores = { ...this.gameState.scores, ...update.scores };
+    }
+
+    if (playerId && update?.pos && this.is3D) {
+      const mesh = this.otherPlayerMeshes.get(playerId);
+      if (mesh) {
+        mesh.position.set(update.pos.x || 0, update.pos.y || 0, update.pos.z || 0);
+        mesh.userData.lastNetUpdate = performance.now();
+      }
+    }
+
     this.updateUI();
   }
+
 
   onPlayerAction(data) {
     // Handle other player actions for visual feedback
@@ -1507,6 +1566,9 @@ export class MinigameController {
 
       this.update(delta);
       this.render();
+      this.billboardCharacters();
+      this.updateNameplates();
+      this.maybeEmitNetPosition();
       
       this.animationFrame = requestAnimationFrame(loop);
     };
@@ -3025,4 +3087,153 @@ export class MinigameController {
     document.getElementById('minigame-cinematic')?.remove();
     document.getElementById('tutorial-overlay')?.remove();
   }
+
+  // --- Multiplayer lightweight avatar + username system ---
+
+  createOtherPlayerMeshesFromLobby() {
+    if (!this.scene) return;
+
+    // Clear any previous
+    this.otherPlayerMeshes.forEach(mesh => {
+      try { this.scene.remove(mesh); } catch (e) {}
+    });
+    this.otherPlayerMeshes.clear();
+
+    const lobbyPlayers = this.app?.lobby?.currentLobby?.players || [];
+    const localId = this.app?.socket?.socket?.id || this.app?.state?.user?.id;
+
+    for (const p of lobbyPlayers) {
+      const pid = p.id || p.playerId || p.socketId;
+      if (!pid) continue;
+      if (pid === localId) continue;
+
+      const characterId = p.selected_character || p.characterId || p.character || 'jojo';
+      const style = this.getCharacterStyle(characterId);
+
+      const mesh = this.buildCharacterModel({ ...style, id: characterId });
+      mesh.position.set((Math.random() - 0.5) * 6, 0, (Math.random() - 0.5) * 6);
+      mesh.userData.playerId = pid;
+      mesh.userData.username = p.username || p.name || 'Player';
+      mesh.userData.isRemote = true;
+
+      this.scene.add(mesh);
+      this.otherPlayerMeshes.set(pid, mesh);
+    }
+  }
+
+  ensureNameplatesRoot() {
+    if (this.nameplatesRoot) return;
+
+    const screen = document.getElementById('minigame-screen') || document.body;
+    let root = document.getElementById('minigame-nameplates');
+    if (!root) {
+      root = document.createElement('div');
+      root.id = 'minigame-nameplates';
+      root.style.position = 'absolute';
+      root.style.left = '0';
+      root.style.top = '0';
+      root.style.width = '100%';
+      root.style.height = '100%';
+      root.style.pointerEvents = 'none';
+      root.style.zIndex = '30';
+      screen.appendChild(root);
+    }
+    this.nameplatesRoot = root;
+  }
+
+  ensureNameplateForPlayer(playerKey) {
+    this.ensureNameplatesRoot();
+    if (this.nameplates.has(playerKey)) return;
+
+    const el = document.createElement('div');
+    el.className = 'nameplate';
+    el.style.position = 'absolute';
+    el.style.transform = 'translate(-50%, -110%)';
+    el.style.fontFamily = 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+    el.style.fontWeight = '800';
+    el.style.fontSize = '14px';
+    el.style.padding = '4px 8px';
+    el.style.borderRadius = '10px';
+    el.style.background = 'rgba(0,0,0,0.55)';
+    el.style.color = '#fff';
+    el.style.textShadow = '0 2px 6px rgba(0,0,0,0.6)';
+    el.style.whiteSpace = 'nowrap';
+    el.style.backdropFilter = 'blur(4px)';
+    el.style.border = '1px solid rgba(255,255,255,0.15)';
+
+    let username = 'You';
+    if (playerKey !== 'local') {
+      const mesh = this.otherPlayerMeshes.get(playerKey);
+      username = mesh?.userData?.username || 'Player';
+    } else {
+      username = this.app?.state?.user?.profile?.username || this.app?.state?.user?.username || 'You';
+    }
+
+    el.textContent = username;
+    this.nameplatesRoot.appendChild(el);
+    this.nameplates.set(playerKey, el);
+  }
+
+  updateNameplates() {
+    if (!this.is3D || !this.camera || !this.renderer || !this.nameplatesRoot) return;
+
+    const rect = this.renderer.domElement.getBoundingClientRect();
+
+    const updateOne = (key, mesh) => {
+      const el = this.nameplates.get(key);
+      if (!el || !mesh) return;
+
+      const worldPos = new THREE.Vector3();
+      mesh.getWorldPosition(worldPos);
+      worldPos.y += 2.0;
+
+      const projected = worldPos.project(this.camera);
+      const x = (projected.x * 0.5 + 0.5) * rect.width;
+      const y = (-projected.y * 0.5 + 0.5) * rect.height;
+
+      const isBehind = projected.z > 1;
+      el.style.display = isBehind ? 'none' : 'block';
+      el.style.left = `${x}px`;
+      el.style.top = `${y}px`;
+    };
+
+    if (this.playerMesh) updateOne('local', this.playerMesh);
+
+    this.otherPlayerMeshes.forEach((mesh, id) => {
+      if (!this.nameplates.has(id)) this.ensureNameplateForPlayer(id);
+      updateOne(id, mesh);
+    });
+  }
+
+  billboardCharacters() {
+    if (!this.is3D || !this.camera) return;
+
+    const faceOne = (mesh) => {
+      if (!mesh) return;
+      const camPos = this.camera.position;
+      const pos = mesh.position;
+      const look = new THREE.Vector3(camPos.x, pos.y, camPos.z);
+      mesh.lookAt(look);
+    };
+
+    faceOne(this.playerMesh);
+    this.otherPlayerMeshes.forEach(faceOne);
+  }
+
+  maybeEmitNetPosition() {
+    if (!this.is3D) return;
+    if (!this.isPlaying) return;
+    if (this.isPractice || this.isTutorial) return;
+    if (!this.app?.socket?.isConnected?.()) return;
+
+    const now = performance.now();
+    const interval = 1000 / (this.netPosHz || 10);
+    if (now - this.lastPosEmit < interval) return;
+    this.lastPosEmit = now;
+
+    this.app.socket.emit('minigame:input', {
+      pos: { x: this.playerState.x, y: this.playerState.y || 0, z: this.playerState.z }
+    });
+  }
+
 }

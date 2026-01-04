@@ -1351,7 +1351,7 @@ export class GameEngine {
     
     // Navigate to minigame screen after a delay
     setTimeout(() => {
-      this.app.navigateTo('minigame', { minigame: data.minigame, teams: data.teams });
+      this.app.navigateTo('minigame', { minigame: data.minigame, teams: data.teams, category: data.category, awardsCoins: data.awardsCoins });
     }, 2000);
   }  onTurnStart(data) {
     this.currentPlayer = data.playerId;
